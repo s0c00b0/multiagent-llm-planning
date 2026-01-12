@@ -51,11 +51,6 @@ class CoinCollectorGame:
         coins_in_containers: bool = False,
         seed: Optional[int] = None
     ):
-        """
-        Args:
-            connectivity: 0.0 = minimal connections, 1.0 = maximum connections
-            coins_in_containers: If True, coins may be hidden in containers
-        """
         if num_locations < 1:
             raise ValueError(f"num_locations must be at least 1, got {num_locations}")
         if num_players < 1:
@@ -443,14 +438,11 @@ class CoinCollectorGame:
                     exit_direction = "west"
                     enter_direction = "east"
             
-            # Record movement events for multiplayer visibility
             if self.num_players > 1 and old_loc is not None and exit_direction is not None:
-                # Record exit event in old room (with empty seen_by set)
                 if old_loc not in self.room_movement_events:
                     self.room_movement_events[old_loc] = []
                 self.room_movement_events[old_loc].append((player_id, exit_direction, 'exited', set()))
                 
-                # Record enter event in new room (with direction they came from, empty seen_by set)
                 if new_loc not in self.room_movement_events:
                     self.room_movement_events[new_loc] = []
                 self.room_movement_events[new_loc].append((player_id, enter_direction, 'entered', set()))

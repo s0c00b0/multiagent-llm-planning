@@ -188,16 +188,6 @@ class LLMGameRunner:
                 if "top_p" in self.api_params and self.api_params["top_p"] is not None:
                     generation_config["top_p"] = self.api_params["top_p"]
                 
-                if "seed" in self.api_params and self.api_params["seed"] is not None:
-                    seed_value = self.api_params["seed"]
-                    if isinstance(seed_value, str):
-                        try:
-                            seed_value = int(seed_value)
-                        except ValueError:
-                            seed_value = None
-                    if seed_value is not None:
-                        generation_config["seed"] = seed_value
-                
                 if generation_config:
                     response = model.generate_content(full_prompt, generation_config=generation_config)
                 else:
@@ -345,7 +335,7 @@ GAME RULES:
 - You are one of {num_players} players in this game.
 - You can see other players when they are in the same room as you.
 - You can see when players enter or exit your current room (including the direction they came from or went to).
-- Your objective is to help collect all {num_coins} coin(s) in the game world.
+- Your objective is to help collect all {num_coins} coin(s) in the game world as quickly as possible.
 - You can move between rooms, open/close doors and containers, and take items.
 - The game is won when ALL {num_coins} coin(s) are collected (by any player or combination of players).
 - Each player has their own separate view of the game - you only see your own observations and actions.
@@ -460,7 +450,10 @@ RESPONSE FORMAT:
             output_base.mkdir(exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            run_dir = output_base / timestamp
+            sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
+            sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
+            folder_name = f"{sanitized_model_name}_{timestamp}"
+            run_dir = output_base / folder_name
             run_dir.mkdir(exist_ok=True)
             
             if output_file:

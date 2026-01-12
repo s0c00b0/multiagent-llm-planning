@@ -47,3 +47,6 @@ dist/
 
 # Generated images
 *.png
+
+# Experiment Output
+out/
