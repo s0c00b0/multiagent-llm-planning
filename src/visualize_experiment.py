@@ -441,36 +441,49 @@ def visualize_experiment(
                 ax.text(square_x, square_y, f'{player_id + 1}', ha='center', va='center',
                        fontsize=8, color='white', fontweight='bold', zorder=text_zorder)
             
-            for room_name, _ in filtered_path:
-                if (player_id, room_name) in room_actions and room_name in pos:
-                    x, y = pos[room_name]
-                    if room_name in room_box_dims:
-                        box_width, box_height = room_box_dims[room_name]
-                        action_x = x + box_width / 2 - 0.05
-                        action_y = y + box_height / 2 - 0.05
-                    else:
-                        action_x = x + 0.3
-                        action_y = y + 0.1
-                    
-                    star_size = 0.06
-                    inner_radius = star_size * 0.38
-                    
-                    star_points = []
-                    for i in range(10):
-                        angle = (i * 2 * math.pi / 10) + math.pi / 2
-                        if i % 2 == 0:
-                            r = star_size
-                        else:
-                            r = inner_radius
-                        star_points.append((action_x + r * math.cos(angle), 
-                                          action_y + r * math.sin(angle)))
-                    
-                    codes = [MPLPath.MOVETO] + [MPLPath.LINETO] * 9 + [MPLPath.CLOSEPOLY]
-                    star_points.append((0, 0))
-                    star_path = MPLPath(star_points, codes)
-                    star = PathPatch(star_path, facecolor=color, zorder=marker_zorder,
-                                    alpha=0.9, linewidth=1.5, edgecolor='black')
-                    ax.add_patch(star)
+    
+    if draw_paths:
+        # Aggregate room actions by room so multiple players don't overlap
+        room_to_players = {}
+        for (player_id, room_name) in room_actions:
+            room_to_players.setdefault(room_name, []).append(player_id)
+        
+        star_size = 0.06
+        inner_radius = star_size * 0.38
+        spacing = star_size * 1.5
+        
+        for room_name, players in room_to_players.items():
+            if room_name not in pos:
+                continue
+            x, y = pos[room_name]
+            if room_name in room_box_dims:
+                box_width, box_height = room_box_dims[room_name]
+                base_x = x + box_width / 2 - 0.05
+                base_y = y + box_height / 2 - 0.05
+            else:
+                base_x = x + 0.3
+                base_y = y + 0.1
+            
+            for idx, player_id in enumerate(players):
+                color = colors[player_id % len(colors)]
+                offset_x = 0
+                offset_y = -idx * spacing
+                action_x = base_x + offset_x
+                action_y = base_y + offset_y
+                
+                star_points = []
+                for i in range(10):
+                    angle = (i * 2 * math.pi / 10) + math.pi / 2
+                    r = star_size if i % 2 == 0 else inner_radius
+                    star_points.append((action_x + r * math.cos(angle),
+                                       action_y + r * math.sin(angle)))
+                
+                codes = [MPLPath.MOVETO] + [MPLPath.LINETO] * 9 + [MPLPath.CLOSEPOLY]
+                star_points.append((0, 0))
+                star_path = MPLPath(star_points, codes)
+                star = PathPatch(star_path, facecolor=color, zorder=base_path_zorder + 1,
+                                 alpha=0.9, linewidth=1.5, edgecolor='black')
+                ax.add_patch(star)
     
     all_x = [x for x, y in pos.values()]
     all_y = [y for x, y in pos.values()]

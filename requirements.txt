@@ -8,6 +8,7 @@ python-dotenv>=1.0.0
 # LLM API dependencies (install only what you need)
 openai>=1.0.0  # For OpenAI (ChatGPT) models
 google-generativeai>=0.3.0  # For Google (Gemini) models
+vllm>=0.8.0  # For VLLM local model inference
 
 # Testing dependencies
 pytest>=7.0.0
