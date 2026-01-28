@@ -12,7 +12,7 @@ model_name: Qwen/Qwen3-32B
 api_params:
   # VLLM parameters (for local model inference)
   temperature: 0.7  # Sampling temperature (0.0-2.0, default: 1.0)
-  max_tokens: 2048  # Maximum tokens in completion (default: 500)
+  max_tokens: 8192  # Maximum tokens in completion (default: 500). For PDDL mode, recommend 4096-8192 to account for reasoning tokens + both domain and problem files
   top_p: 0.9  # Nucleus sampling parameter (0.0-1.0, null = disabled)
   seed: 42  # Random seed for deterministic responses (integer, null = random)
   gpu_memory_utilization: 0.9  # GPU memory utilization (0.0-1.0, default: 0.9). Increase if you have more GPU memory.
@@ -30,16 +30,19 @@ api_params:
   # max_output_tokens: 200  # Uncomment and adjust for Gemini
 
 # Game Configuration
-num_locations: 10  # Number of rooms/locations in the house
-num_coins: 2       # Number of coins to collect
-num_players: 2     # Number of players/agents
-max_steps: 40    # Maximum steps per player (null = unlimited)
+num_locations: 5  # Number of rooms/locations in the house
+num_coins: 1       # Number of coins to collect
+num_players: 1     # Number of players/agents
+max_steps: 20    # Maximum steps per player (null = unlimited)
 seed: 42           # Random seed for reproducibility (null = random)
 include_doors: false  # Whether rooms have doors that need to be opened (true/false)
 num_distractor_items: 0  # Number of distractor (non-coin) items (0-10, default: 0)
 coins_in_containers: false  # Whether coins can be placed inside containers (true/false)
 limit_inventory_size: true  # Whether inventory size is limited (true/false). If true, capacity = num_coins + 1
 connectivity: 0.5  # Room connectivity (0.0-1.0): 0.0=minimal connections, 1.0=maximum connections, 0.5=moderate (default)
+prompt_version: improved  # Prompt version to use: "standard" or "improved" (default: standard)
+use_pddl: true  # If true, use PDDL planning mode (only for Qwen3-32B in run_experiment_vllm.py). Model generates PDDL domain/problem files, solves them, and executes first action from plan.
+verbose: true # Whether to print verbose output (true/false)
 
 # Optional Output Settings
 # quiet: false  # Reduce output verbosity (default: false)

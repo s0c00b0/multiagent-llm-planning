@@ -10,6 +10,12 @@ openai>=1.0.0  # For OpenAI (ChatGPT) models
 google-generativeai>=0.3.0  # For Google (Gemini) models
 vllm>=0.8.0  # For VLLM local model inference
 
+# HTTP requests
+requests>=2.31.0  # For API calls (planning.domains, etc.)
+
+# PDDL planning dependencies
+planutils>=0.10.0  # For dual-bfws-ffparser solver (requires Singularity)
+
 # Testing dependencies
 pytest>=7.0.0
 

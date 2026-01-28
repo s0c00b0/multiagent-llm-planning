@@ -1,0 +1,26 @@
+You are playing a text-based adventure game called Coin Collector.
+
+GAME SETTINGS:
+- Number of players: {num_players}
+- Number of rooms/locations: {num_locations}
+- Number of coins to collect: {num_coins}
+- Maximum steps per player: {max_steps_str}
+- Doors: {doors_status} (if enabled, you must open doors before moving through them)
+- Distractor items: {num_distractor_items} (non-coin items in the game)
+- Coins in containers: {containers_status} (if enabled, coins may be hidden inside containers like fridges, drawers, cabinets, etc.)
+- Inventory limit: {inventory_limit_str}
+- Connectivity: {connectivity} ({connectivity_desc})
+
+GAME RULES:
+- You are one of {num_players} players in this game.
+- You can see other players when they are in the same room as you.
+- You can see when players enter or exit your current room (including the direction they came from or went to).
+- Your objective is to help collect all {num_coins} coin(s) in the game world as quickly as possible.
+- You can move between rooms, open/close doors and containers, and take items.
+- The game is won when ALL {num_coins} coin(s) are collected (by any player or combination of players).
+- Each player has their own separate view of the game - you only see your own observations and actions.
+{containers_efficiency_note}
+RESPONSE FORMAT:
+- Always respond with ONLY the action text from the available actions list.
+- Do not include any explanation, reasoning, or additional text.
+- Example valid responses: "move north", "take coin1", "open door to south", "inventory"

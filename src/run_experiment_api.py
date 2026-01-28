@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import argparse
+import subprocess
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
@@ -84,6 +85,23 @@ class LLMGameRunner:
                 self._client_template = genai
             except ImportError:
                 raise ImportError("google-generativeai package not installed. Install with: pip install google-generativeai")
+    
+    def _load_prompt_template(self, prompt_version: str = "standard") -> str:
+        """Load prompt template from file."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        prompt_file = os.path.join(project_root, "prompts", f"{prompt_version}.txt")
+        
+        if not os.path.exists(prompt_file):
+            print(f"Warning: Prompt file {prompt_file} not found. Using default prompt.")
+            return None
+        
+        try:
+            with open(prompt_file, 'r') as f:
+                return f.read()
+        except Exception as e:
+            print(f"Warning: Error loading prompt file {prompt_file}: {e}. Using default prompt.")
+            return None
     
     def _create_player_clients(self, num_players: int) -> List[Any]:
         clients = []
@@ -269,9 +287,11 @@ Example: "move north" or "take coin1" or "open door to north"
         coins_in_containers: bool = False,
         limit_inventory_size: bool = True,
         connectivity: float = 0.5,
+        prompt_version: str = "standard",
         verbose: bool = True,
         auto_save: bool = True,
-        output_file: Optional[str] = None
+        output_file: Optional[str] = None,
+        run_dir_suffix: Optional[str] = None
     ) -> Tuple[GameStats, Dict[str, Any], Optional[Path]]:
         game = CoinCollectorGame(
             num_locations=num_locations,
@@ -317,8 +337,30 @@ Example: "move north" or "take coin1" or "open door to north"
         doors_status = "enabled" if include_doors else "disabled"
         containers_status = "enabled" if coins_in_containers else "disabled"
         connectivity_desc = "minimal connections" if connectivity <= 0.3 else "maximum connections" if connectivity >= 0.7 else "moderate connections"
+        inventory_limit_str = f"enabled (capacity: {num_coins + 1} items)" if limit_inventory_size else "disabled (unlimited)"
         
-        system_prompt = f"""You are playing a text-based adventure game called Coin Collector.
+        containers_efficiency_note = ""
+        if prompt_version == "improved" and not coins_in_containers:
+            containers_efficiency_note = "Only check containers if coins can actually be inside them - don't waste actions checking containers when coins are only found in plain sight. "
+        
+        prompt_template = self._load_prompt_template(prompt_version)
+        
+        if prompt_template:
+            system_prompt = prompt_template.format(
+                num_players=num_players,
+                num_locations=num_locations,
+                num_coins=num_coins,
+                max_steps_str=max_steps_str,
+                doors_status=doors_status,
+                num_distractor_items=num_distractor_items,
+                containers_status=containers_status,
+                inventory_limit_str=inventory_limit_str,
+                connectivity=connectivity,
+                connectivity_desc=connectivity_desc,
+                containers_efficiency_note=containers_efficiency_note
+            )
+        else:
+            system_prompt = f"""You are playing a text-based adventure game called Coin Collector.
 
 GAME SETTINGS:
 - Number of players: {num_players}
@@ -328,7 +370,7 @@ GAME SETTINGS:
 - Doors: {doors_status} (if enabled, you must open doors before moving through them)
 - Distractor items: {num_distractor_items} (non-coin items in the game)
 - Coins in containers: {containers_status} (if enabled, coins may be hidden inside containers like fridges, drawers, cabinets, etc.)
-- Inventory limit: {'enabled (capacity: ' + str(num_coins + 1) + ' items)' if limit_inventory_size else 'disabled (unlimited)'}
+- Inventory limit: {inventory_limit_str}
 - Connectivity: {connectivity} ({connectivity_desc})
 
 GAME RULES:
@@ -453,6 +495,8 @@ RESPONSE FORMAT:
             sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
             sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
             folder_name = f"{sanitized_model_name}_{timestamp}"
+            if run_dir_suffix:
+                folder_name = f"{folder_name}_{run_dir_suffix}"
             run_dir = output_base / folder_name
             run_dir.mkdir(exist_ok=True)
             
@@ -523,6 +567,110 @@ def load_config(config_path: str) -> Dict[str, Any]:
         sys.exit(1)
 
 
+def generate_config_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate config combinations by zipping list parameters."""
+    sweep_params = {}
+    fixed_params = {}
+    
+    for key, value in config.items():
+        if isinstance(value, list) and key not in ['api_params']:
+            sweep_params[key] = value
+        else:
+            fixed_params[key] = value
+    
+    if not sweep_params:
+        return [config]
+    
+    list_lengths = [len(v) for v in sweep_params.values()]
+    if len(set(list_lengths)) > 1:
+        raise ValueError(
+            f"All list parameters must have the same length. Found lengths: {dict(zip(sweep_params.keys(), list_lengths))}"
+        )
+    
+    n_experiments = list_lengths[0] if list_lengths else 0
+    keys = list(sweep_params.keys())
+    combinations = []
+    
+    for i in range(n_experiments):
+        combo_config = fixed_params.copy()
+        for key in keys:
+            combo_config[key] = sweep_params[key][i]
+        combinations.append(combo_config)
+    
+    return combinations
+
+
+def call_visualize_experiment(experiment_dir: Path) -> bool:
+    """Call visualize_experiment.py for the given experiment directory."""
+    try:
+        # __file__ is in src/, so parent is project root
+        script_path = Path(__file__).parent / "visualize_experiment.py"
+        result = subprocess.run(
+            [sys.executable, str(script_path), str(experiment_dir)],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print(result.stdout)
+            return True
+        else:
+            print(f"Warning: Visualization failed for {experiment_dir}: {result.stderr}", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"Warning: Error calling visualization for {experiment_dir}: {e}", file=sys.stderr)
+        return False
+
+
+def _create_run_suffix(config: Dict[str, Any], base_config: Dict[str, Any], combo_idx: int, total_combos: int) -> str:
+    """Create a suffix for the run directory based on varying parameters."""
+    if total_combos == 1:
+        return ""
+    
+    varying_params = []
+    for key, value in base_config.items():
+        if isinstance(value, list) and key not in ['api_params']:
+            varying_params.append(key)
+    
+    if not varying_params:
+        return f"run{combo_idx + 1}"
+    
+    parts = []
+    for param in varying_params:
+        value = config[param]
+        if isinstance(value, bool):
+            short_val = "T" if value else "F"
+        elif isinstance(value, (int, float)):
+            short_val = str(value)
+        elif isinstance(value, str):
+            short_val = value[:4].replace(' ', '_')
+        else:
+            short_val = str(value)[:4]
+        parts.append(f"{param[:3]}{short_val}")
+    
+    suffix = "_".join(parts)
+    suffix = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in suffix)
+    return f"run{combo_idx + 1}_{suffix}"
+
+
+def _parse_config_value(key: str, value: Any) -> Any:
+    """Parse a config value, handling string booleans and type conversions."""
+    if key in ['include_doors', 'coins_in_containers', 'limit_inventory_size']:
+        if isinstance(value, str):
+            value_str = value.lower()
+            return value_str in ('true', '1', 'yes', 'on')
+        return bool(value)
+    elif key == 'connectivity':
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return 0.5
+        return float(value) if value is not None else 0.5
+    elif key in ['num_locations', 'num_coins', 'num_players', 'num_distractor_items', 'max_steps', 'seed']:
+        return value
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description='Run Coin Collector game with LLM agents')
     parser.add_argument('--config', type=str, default='config.yaml',
@@ -531,75 +679,92 @@ def main():
     args = parser.parse_args()
     
     load_env_file('.env')
-    config = load_config(args.config)
+    base_config = load_config(args.config)
     
-    model = config.get('model')
-    model_name = config.get('model_name')
-    api_params = config.get('api_params', {})
-    num_locations = config.get('num_locations', 20)
-    num_coins = config.get('num_coins', 3)
-    num_players = config.get('num_players', 2)
-    max_steps = config.get('max_steps')
-    seed = config.get('seed')
+    # Generate all parameter combinations
+    config_combinations = generate_config_combinations(base_config)
+    total_runs = len(config_combinations)
     
-    include_doors = config.get('include_doors', True)
-    if isinstance(include_doors, str):
-        include_doors_str = include_doors.lower()
-        include_doors = include_doors_str in ('true', '1', 'yes', 'on')
+    print(f"\n=== Running {total_runs} experiment(s) ===")
+    if total_runs > 1:
+        print("Multiple parameter combinations detected. Running each sequentially.\n")
     
-    num_distractor_items = config.get('num_distractor_items', 0)
+    exit_code = 0
     
-    coins_in_containers = config.get('coins_in_containers', False)
-    if isinstance(coins_in_containers, str):
-        coins_in_containers_str = coins_in_containers.lower()
-        coins_in_containers = coins_in_containers_str in ('true', '1', 'yes', 'on')
-    
-    limit_inventory_size = config.get('limit_inventory_size', True)
-    if isinstance(limit_inventory_size, str):
-        limit_inventory_size_str = limit_inventory_size.lower()
-        limit_inventory_size = limit_inventory_size_str in ('true', '1', 'yes', 'on')
-    
-    connectivity = config.get('connectivity', 0.5)
-    if isinstance(connectivity, str):
+    for combo_idx, config in enumerate(config_combinations):
+        if total_runs > 1:
+            print(f"\n{'='*60}")
+            print(f"Experiment {combo_idx + 1} of {total_runs}")
+            print(f"{'='*60}\n")
+        
+        model = config.get('model')
+        model_name = config.get('model_name')
+        api_params = config.get('api_params', {})
+        num_locations = config.get('num_locations', 20)
+        num_coins = config.get('num_coins', 3)
+        num_players = config.get('num_players', 2)
+        max_steps = config.get('max_steps')
+        seed = config.get('seed')
+        
+        include_doors = _parse_config_value('include_doors', config.get('include_doors', True))
+        num_distractor_items = config.get('num_distractor_items', 0)
+        coins_in_containers = _parse_config_value('coins_in_containers', config.get('coins_in_containers', False))
+        limit_inventory_size = _parse_config_value('limit_inventory_size', config.get('limit_inventory_size', True))
+        connectivity = _parse_config_value('connectivity', config.get('connectivity', 0.5))
+        
+        quiet = config.get('quiet', False)
+        output_file = config.get('output')
+        no_auto_save = config.get('no_auto_save', False)
+        prompt_version = config.get('prompt_version', 'standard')
+        
+        # Create run directory suffix
+        run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
+        
         try:
-            connectivity = float(connectivity)
-        except ValueError:
-            connectivity = 0.5
+            runner = LLMGameRunner(
+                model_type=model,
+                api_key=None,
+                model_name=model_name,
+                api_params=api_params
+            )
+            
+            stats, game_info, run_dir = runner.run_game(
+                num_locations=num_locations,
+                num_coins=num_coins,
+                num_players=num_players,
+                max_steps=max_steps,
+                seed=seed,
+                include_doors=include_doors,
+                num_distractor_items=num_distractor_items,
+                coins_in_containers=coins_in_containers,
+                limit_inventory_size=limit_inventory_size,
+                connectivity=connectivity,
+                prompt_version=prompt_version,
+                verbose=not quiet,
+                auto_save=not no_auto_save,
+                output_file=output_file,
+                run_dir_suffix=run_suffix
+            )
+            
+            if run_dir:
+                print(f"\nGenerating visualizations for {run_dir}...")
+                call_visualize_experiment(run_dir)
+            
+            if not stats.game_won:
+                exit_code = 1
+            
+        except Exception as e:
+            print(f"Error in experiment {combo_idx + 1}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            exit_code = 1
     
-    quiet = config.get('quiet', False)
-    output_file = config.get('output')
-    no_auto_save = config.get('no_auto_save', False)
+    if total_runs > 1:
+        print(f"\n{'='*60}")
+        print(f"Completed {total_runs} experiment(s)")
+        print(f"{'='*60}\n")
     
-    
-    try:
-        runner = LLMGameRunner(
-            model_type=model,
-            api_key=None,
-            model_name=model_name,
-            api_params=api_params
-        )
-        
-        stats, game_info, run_dir = runner.run_game(
-            num_locations=num_locations,
-            num_coins=num_coins,
-            num_players=num_players,
-            max_steps=max_steps,
-            seed=seed,
-            include_doors=include_doors,
-            num_distractor_items=num_distractor_items,
-            coins_in_containers=coins_in_containers,
-            limit_inventory_size=limit_inventory_size,
-            connectivity=connectivity,
-            verbose=not quiet,
-            auto_save=not no_auto_save,
-            output_file=output_file
-        )
-        
-        sys.exit(0 if stats.game_won else 1)
-    
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':

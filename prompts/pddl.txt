@@ -1,0 +1,176 @@
+You are Player {player_id} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
+
+Current Situation (Turn {turn_num}):
+{observation}
+
+Available Actions:
+{valid_actions_list}
+{feedback_section}
+
+You need to generate BOTH a PDDL domain file AND a problem file in your response.
+
+MODE SELECTION:
+- If you see ANY coins mentioned (e.g., "coin1", "coin2", etc.), you are in COLLECT mode.
+- If NO coins are visible in the observation, you are in EXPLORE mode.
+
+DOMAIN FILE should define different structures based on mode:
+
+EXPLORE MODE (no coins visible):
+- Types: location, direction
+- Predicates: 
+  - at(location) - your current location
+  - door-between(location1, location2, direction) - connection between rooms (bidirectional)
+  - door-open(location1, location2, direction) - door is open (bidirectional)
+  - visited(location) - rooms you have already visited
+- Actions: 
+  - open-door(location1, location2, direction) - open a door between rooms
+  - move(from_location, to_location, direction) - move between rooms (requires door to be open)
+
+COLLECT MODE (coins visible):
+- Types: location, object, direction
+- Predicates: 
+  - at(location) - your current location
+  - coin_at(object, location) - coin location (only include coins you can see)
+  - collected(object) - coin has been collected/taken
+  - door-between(location1, location2, direction) - connection between rooms (if doors exist)
+  - door-open(location1, location2, direction) - door is open (if doors exist)
+  - visited(location) - rooms you have already visited
+- Actions: 
+  - open-door(location1, location2, direction) - open a door between rooms (if doors exist)
+  - move(from_location, to_location, direction) - move between rooms
+  - take(object, location) - take a coin
+
+PROBLEM FILE should define:
+- Objects: all current locations, visible coins (objects - only in COLLECT mode), directions (north, south, east, west)
+- Initial state: 
+  - Your current location (at(current_location))
+  - Visited rooms (visited(room_name) - include all rooms you have been to)
+  - Connections: door-between(loc1, loc2, dir) for each connection shown in observation (bidirectional: if "To the North you see X", include both door-between(current, X, north) and door-between(X, current, south))
+  - Door states: door-open(loc1, loc2, dir) for open doors (bidirectional - if door is open, include both directions)
+  - COLLECT MODE ONLY: Visible coin locations (coin_at(coin, location) - only include coins you can see in the observation)
+- Goal: 
+  - EXPLORE MODE: (at(target_room)) OR (visited(target_room)) - visit an unvisited room that appears in the connections from your current location
+  - COLLECT MODE: If you see a coin in your current location, goal is (collected(coin_name)). If you see a coin in another room, goal is (at(room_with_coin))
+
+IMPORTANT:
+- You MUST provide BOTH the domain file AND the problem file in your response
+- All door predicates, including door-between and door-open should be bidirectional - if door-between(A, B, north), also include door-between(B, A, south).
+- The PDDL solver will generate actions in PDDL format like (move kitchen bathroom north), but these will be automatically converted to game actions like "move north"
+- The solver's plan output format is fine - the system will extract the game actions from the PDDL solver output automatically
+- In EXPLORE mode: Your goal is to visit a room that you have never visited.
+- In COLLECT mode: Your goal is to collect an uncollected coin.
+
+Respond with BOTH files in this exact format:
+
+EXPLORE MODE example:
+```pddl
+(define (domain exploration)
+  (:requirements :strips :typing)
+  (:types location direction)
+  (:predicates
+    (at ?l - location)
+    (door-between ?loc1 - location ?loc2 - location ?dir - direction)
+    (door-open ?loc1 - location ?loc2 - location ?dir - direction)
+    (visited ?loc - location)
+  )
+  (:action open-door
+    :parameters (?loc1 - location ?loc2 - location ?dir - direction)
+    :precondition (and (at ?loc1)
+                       (door-between ?loc1 ?loc2 ?dir)
+                       (not (door-open ?loc1 ?loc2 ?dir)))
+    :effect (and (door-open ?loc1 ?loc2 ?dir))
+  )
+  (:action move
+    :parameters (?from - location ?to - location ?dir - direction)
+    :precondition (and (at ?from)
+                       (door-between ?from ?to ?dir)
+                       (door-open ?from ?to ?dir))
+    :effect (and (not (at ?from))
+                 (at ?to)
+                 (visited ?to))
+  )
+)
+```
+
+```pddl
+(define (problem explore-problem)
+  (:domain exploration)
+  (:objects
+    kitchen bathroom ... - location
+    north south east west - direction
+  )
+  (:init
+    (at kitchen)
+    (visited kitchen)
+    (door-between kitchen bathroom north)
+    (door-between bathroom kitchen south)
+    (door-open kitchen bathroom north)
+    (door-open bathroom kitchen south)
+    ...
+  )
+  (:goal
+    (at target_room)
+  )
+)
+```
+
+COLLECT MODE example:
+```pddl
+(define (domain coin-collector)
+  (:requirements :strips :typing)
+  (:types location object direction)
+  (:predicates
+    (at ?l - location)
+    (coin_at ?o - object ?l - location)
+    (collected ?o - object)
+    (door-between ?loc1 - location ?loc2 - location ?dir - direction)
+    (door-open ?loc1 - location ?loc2 - location ?dir - direction)
+    (visited ?loc - location)
+  )
+  (:action open-door
+    :parameters (?loc1 - location ?loc2 - location ?dir - direction)
+    :precondition (and (at ?loc1)
+                       (door-between ?loc1 ?loc2 ?dir)
+                       (not (door-open ?loc1 ?loc2 ?dir)))
+    :effect (and (door-open ?loc1 ?loc2 ?dir))
+  )
+  (:action move
+    :parameters (?from - location ?to - location ?dir - direction)
+    :precondition (and (at ?from)
+                       (door-between ?from ?to ?dir)
+                       (door-open ?from ?to ?dir))
+    :effect (and (not (at ?from))
+                 (at ?to)
+                 (visited ?to))
+  )
+  (:action take
+    :parameters (?o - object ?l - location)
+    :precondition (and (at ?l) (coin_at ?o ?l))
+    :effect (and (not (coin_at ?o ?l)) (collected ?o))
+  )
+)
+```
+
+```pddl
+(define (problem coin-collector-problem)
+  (:domain coin-collector)
+  (:objects
+    kitchen bathroom ... - location
+    coin1 coin2 ... - object
+    north south east west - direction
+  )
+  (:init
+    (at kitchen)
+    (visited kitchen)
+    (coin_at coin1 bathroom)
+    (door-between kitchen bathroom north)
+    (door-between bathroom kitchen south)
+    (door-open kitchen bathroom north)
+    (door-open bathroom kitchen south)
+    ...
+  )
+  (:goal
+    (collected coin1)
+  )
+)
+```

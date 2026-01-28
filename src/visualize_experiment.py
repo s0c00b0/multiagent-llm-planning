@@ -107,7 +107,6 @@ def visualize_experiment(
     connectivity = experiment_data.get('connectivity', 0.5)
     player_actions = experiment_data['player_actions']
     
-    # Recreate the game state
     game = CoinCollectorGame(
         num_locations=num_locations,
         num_coins=num_coins,
@@ -180,7 +179,6 @@ def visualize_experiment(
         x2, y2 = pos[target]
         ax.plot([x1, x2], [y1, y2], 'k-', linewidth=1.5, alpha=0.6, zorder=1)
     
-    # Draw nodes (rooms) - matching visualize_map exactly
     def abbreviate_room_name(room_name: str, max_length: int = 10) -> str:
         abbreviations = {
             "living room": "living rm",
