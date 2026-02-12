@@ -1,0 +1,13 @@
+TWO-PLAYER PDDL MODE
+
+You are Player {current_player_id}. The other player is Player {other_player_id}. Your goal is to collect all {num_coins} coin(s) together.
+
+Refer to the base PDDL instructions for domain/problem structure (EXPLORE vs COLLECT mode, predicates, actions, etc.).
+
+You will perform two planning steps:
+
+STEP 1: When asked, generate a PDDL domain and problem that PREDICTS what the other player will plan. Use their observation and their available actions. Model their goal to collect coins. Use the same PDDL structure (EXPLORE/COLLECT mode).
+
+STEP 2: After receiving the other player's predicted plan (solved), generate YOUR OWN PDDL domain and problem. Your plan should account for or coordinate with the other player's predicted actions. You might explore different areas, avoid competing for the same coins, or coordinate collection.
+
+Use the same PDDL structure as single-player mode. You MUST provide BOTH domain and problem files in ```pddl blocks.

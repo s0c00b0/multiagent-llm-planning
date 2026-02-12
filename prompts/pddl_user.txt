@@ -1,0 +1,6 @@
+Current Situation (Turn {turn_num}):
+{observation}
+
+Available Actions:
+{valid_actions_list}
+{feedback_section}

@@ -1,0 +1,9 @@
+OTHER PLAYER'S SITUATION (Player {other_player_id}):
+
+Current Situation (Turn {turn_num}):
+{other_observation}
+
+Other Player's Available Actions:
+{other_valid_actions_list}
+
+Generate the PDDL domain and problem that PREDICTS what the other player will plan.

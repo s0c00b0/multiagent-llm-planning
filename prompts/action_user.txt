@@ -1,0 +1,10 @@
+You are Player {player_id} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
+
+Current Situation (Turn {turn_num}):
+{observation}
+
+Available Actions:
+{valid_actions_list}
+
+Choose one action from the list above. Respond with ONLY the action text, nothing else.
+Example: "move north" or "take coin1" or "open door to north"

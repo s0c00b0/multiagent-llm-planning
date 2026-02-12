@@ -1,0 +1,11 @@
+TWO-PLAYER PDDL - STEP 1: PREDICT OTHER PLAYER'S PDDL
+
+You are Player {current_player_id}. The other player is Player {other_player_id}. Your goal is to collect all {num_coins} coin(s) together.
+
+Before making your own plan, you must PREDICT what the other player will do. Generate a PDDL domain and problem that models the OTHER player's situation and predicted plan.
+
+Use the OTHER player's observation (what they see) and their available actions. Model their goal: to collect coins. Predict what domain and problem they would generate for their own planning.
+
+Use the same PDDL structure as the single-player mode (EXPLORE vs COLLECT mode, domain with predicates and actions, problem with init and goal).
+
+You MUST provide BOTH the domain file AND the problem file in your response. Use ```pddl blocks.

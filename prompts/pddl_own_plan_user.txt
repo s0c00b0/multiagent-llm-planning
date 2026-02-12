@@ -1,0 +1,13 @@
+The other player's predicted plan (solved):
+{other_player_predicted_plan}
+
+YOUR SITUATION (Player {current_player_id}):
+
+Current Situation (Turn {turn_num}):
+{observation}
+
+Your Available Actions:
+{valid_actions_list}
+{feedback_section}
+
+Generate YOUR PDDL domain and problem, considering the other player's predicted plan above.

@@ -1,13 +1,5 @@
-You are Player {player_id} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
-
-Current Situation (Turn {turn_num}):
-{observation}
-
-Available Actions:
-{valid_actions_list}
-{feedback_section}
-
-You need to generate BOTH a PDDL domain file AND a problem file in your response.
+PDDL MODE INSTRUCTIONS:
+Your goal is to collect all {num_coins} coin(s). You must generate BOTH a PDDL domain file AND a problem file in your response.
 
 MODE SELECTION:
 - If you see ANY coins mentioned (e.g., "coin1", "coin2", etc.), you are in COLLECT mode.

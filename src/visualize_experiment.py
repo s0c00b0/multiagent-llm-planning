@@ -441,7 +441,6 @@ def visualize_experiment(
             
     
     if draw_paths:
-        # Aggregate room actions by room so multiple players don't overlap
         room_to_players = {}
         for (player_id, room_name) in room_actions:
             room_to_players.setdefault(room_name, []).append(player_id)

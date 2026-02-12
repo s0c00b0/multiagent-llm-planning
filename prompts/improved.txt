@@ -27,7 +27,7 @@ STRATEGY AND COOPERATION:
 - AVOID WASTING ACTIONS: Be efficient with your actions. Don't waste actions that don't progress you towards your goal.
 - DON'T RE-CHECK ROOMS: Once you've explored a room, you know its contents. Coins don't move and rooms don't change unless a player modifies them (e.g., by opening/closing doors or containers). There's no need to re-check rooms you've already visited unless you're specifically looking for something that might have changed.
 - COORDINATE COLLECTION: If you see another player collecting coins, focus on exploring new areas or collecting coins they haven't reached yet. Avoid competing for the same coins.
-
+{containers_efficiency_note}
 RESPONSE FORMAT:
 - Always respond with ONLY the action text from the available actions list.
 - Do not include any explanation, reasoning, or additional text.

@@ -1,0 +1,9 @@
+TWO-PLAYER PDDL - STEP 3: GENERATE YOUR OWN PLAN
+
+You are Player {current_player_id}. The other player is Player {other_player_id}. Your goal is to collect all {num_coins} coin(s) together.
+
+The other player's predicted plan (solved) will be provided in the user message. Based on that prediction, generate YOUR OWN PDDL domain and problem. Your plan should account for or coordinate with the other player's predicted actions. For example, you might explore different areas, avoid competing for the same coins, or coordinate collection.
+
+Use the same PDDL structure as the single-player mode (EXPLORE vs COLLECT mode, domain with predicates and actions, problem with init and goal).
+
+You MUST provide BOTH the domain file AND the problem file in your response. Use ```pddl blocks.
