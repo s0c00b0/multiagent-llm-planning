@@ -1,0 +1,11 @@
+{
+  "id": "15room_02",
+  "num_locations": 15,
+  "num_coins": 3,
+  "seed": 1879828263,
+  "connectivity": 0.15,
+  "include_doors": true,
+  "num_distractor_items": 2,
+  "coins_in_containers": false,
+  "topology": "long cycle"
+}

@@ -41,8 +41,11 @@ coins_in_containers: false  # Whether coins can be placed inside containers (tru
 limit_inventory_size: true  # Whether inventory size is limited (true/false). If true, capacity = num_coins + 1
 connectivity: 0.5  # Room connectivity (0.0-1.0): 0.0=minimal connections, 1.0=maximum connections, 0.5=moderate (default)
 prompt_version: standard  # Prompt version to use: "standard" or "improved" (default: standard)
-use_pddl: true  # If true, use PDDL planning mode. The model generates PDDL domain/problem files, solves them, and executes the plan in sequence until complete or the next action is invalid. Supported in `run_experiment_vllm.py` (Qwen3-32B) and `run_experiment_api.py` (OpenAI/Gemini).
+use_pddl: false  # If true, use PDDL planning mode. The model generates PDDL domain/problem files, solves them, and executes the plan in sequence until complete or the next action is invalid. Supported in `run_experiment_vllm.py` (Qwen3-32B) and `run_experiment_api.py` (OpenAI/Gemini).
 verbose: true # Whether to print verbose output (true/false)
+
+# Dataset: run on all 20 predefined maps (dataset/maps/index.json) instead of a single config
+use_dataset: true  # If true, runs one game per dataset map; overrides num_locations, seed, connectivity, include_doors, num_distractor_items, coins_in_containers per map
 
 # Optional Output Settings
 # quiet: false  # Reduce output verbosity (default: false)

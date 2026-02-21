@@ -1,0 +1,11 @@
+{
+  "id": "10room_04",
+  "num_locations": 10,
+  "num_coins": 2,
+  "seed": 1189751103,
+  "connectivity": 0.65,
+  "include_doors": true,
+  "num_distractor_items": 2,
+  "coins_in_containers": false,
+  "topology": "two cycles"
+}

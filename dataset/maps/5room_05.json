@@ -1,0 +1,11 @@
+{
+  "id": "5room_05",
+  "num_locations": 5,
+  "num_coins": 1,
+  "seed": 1540492440,
+  "connectivity": 0.08,
+  "include_doors": true,
+  "num_distractor_items": 2,
+  "coins_in_containers": false,
+  "topology": "hub and spokes"
+}

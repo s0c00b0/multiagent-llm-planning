@@ -1,0 +1,11 @@
+{
+  "id": "10room_10",
+  "num_locations": 10,
+  "num_coins": 2,
+  "seed": 17955333,
+  "connectivity": 0.08,
+  "include_doors": true,
+  "num_distractor_items": 2,
+  "coins_in_containers": false,
+  "topology": "dense mesh"
+}

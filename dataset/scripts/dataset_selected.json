@@ -1,0 +1,22 @@
+[
+  {"id": "5room_01", "num_locations": 5, "seed": 304912982, "connectivity": 0.08, "topology": "linear"},
+  {"id": "5room_02", "num_locations": 5, "seed": 1764265618, "connectivity": 0.08, "topology": "straight line"},
+  {"id": "5room_03", "num_locations": 5, "seed": 1286196999, "connectivity": 0.08, "topology": "one cycle"},
+  {"id": "5room_04", "num_locations": 5, "seed": 417315900, "connectivity": 0.08, "topology": "branching"},
+  {"id": "5room_05", "num_locations": 5, "seed": 1540492440, "connectivity": 0.08, "topology": "hub and spokes"},
+  {"id": "10room_01", "num_locations": 10, "seed": 1401807338, "connectivity": 0.08, "topology": "linear"},
+  {"id": "10room_02", "num_locations": 10, "seed": 1993447386, "connectivity": 0.15, "topology": "straight line"},
+  {"id": "10room_03", "num_locations": 10, "seed": 659867483, "connectivity": 0.25, "topology": "one cycle"},
+  {"id": "10room_04", "num_locations": 10, "seed": 1189751103, "connectivity": 0.65, "topology": "two cycles"},
+  {"id": "10room_05", "num_locations": 10, "seed": 360882805, "connectivity": 0.85, "topology": "branchy path"},
+  {"id": "10room_06", "num_locations": 10, "seed": 391864753, "connectivity": 0.08, "topology": "complex branching"},
+  {"id": "10room_07", "num_locations": 10, "seed": 334349556, "connectivity": 0.25, "topology": "grid-like"},
+  {"id": "10room_08", "num_locations": 10, "seed": 185180108, "connectivity": 0.08, "topology": "tree with cycles"},
+  {"id": "10room_09", "num_locations": 10, "seed": 201677747, "connectivity": 0.95, "topology": "chain with side branches"},
+  {"id": "10room_10", "num_locations": 10, "seed": 17955333, "connectivity": 0.08, "topology": "dense mesh"},
+  {"id": "15room_01", "num_locations": 15, "seed": 1367134272, "connectivity": 0.08, "topology": "linear"},
+  {"id": "15room_02", "num_locations": 15, "seed": 1879828263, "connectivity": 0.15, "topology": "long cycle"},
+  {"id": "15room_03", "num_locations": 15, "seed": 558663601, "connectivity": 0.08, "topology": "multi-branch"},
+  {"id": "15room_04", "num_locations": 15, "seed": 95253570, "connectivity": 0.08, "topology": "complex mesh"},
+  {"id": "15room_05", "num_locations": 15, "seed": 2137609135, "connectivity": 0.15, "topology": "highly connected"}
+]

@@ -105,8 +105,9 @@ def visualize_experiment(
     coins_in_containers = experiment_data.get('coins_in_containers', False)
     limit_inventory_size = experiment_data.get('limit_inventory_size', True)
     connectivity = experiment_data.get('connectivity', 0.5)
+    topology = experiment_data.get('topology')
     player_actions = experiment_data['player_actions']
-    
+
     game = CoinCollectorGame(
         num_locations=num_locations,
         num_coins=num_coins,
@@ -117,7 +118,8 @@ def visualize_experiment(
         num_distractor_items=num_distractor_items,
         coins_in_containers=coins_in_containers,
         limit_inventory_size=limit_inventory_size,
-        connectivity=connectivity
+        connectivity=connectivity,
+        topology=topology,
     )
     
     game.reset()
@@ -422,11 +424,10 @@ def visualize_experiment(
             
             start_room, _ = filtered_path[0]
             end_room, _ = filtered_path[-1]
-            if end_room in pos and end_room != start_room:
+            if end_room in pos:
                 x, y = pos[end_room]
                 square_size = 0.15
                 offset_radius = 0.12
-                
                 angle = ((num_players - 1 - player_id) * 2 * math.pi) / num_players if num_players > 1 else 0
                 square_x = x + offset_radius * math.cos(angle)
                 square_y = y + offset_radius * math.sin(angle)

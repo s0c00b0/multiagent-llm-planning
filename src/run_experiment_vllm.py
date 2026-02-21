@@ -629,6 +629,7 @@ class LLMGameRunner:
         coins_in_containers: bool = False,
         limit_inventory_size: bool = True,
         connectivity: float = 0.5,
+        topology: Optional[str] = None,
         prompt_version: str = "standard",
         use_pddl: bool = False,
         verbose: bool = True,
@@ -646,7 +647,8 @@ class LLMGameRunner:
             coins_in_containers=coins_in_containers,
             limit_inventory_size=limit_inventory_size,
             connectivity=connectivity,
-            seed=seed
+            seed=seed,
+            topology=topology,
         )
         
         game.reset()
@@ -1144,6 +1146,7 @@ class LLMGameRunner:
             'coins_in_containers': coins_in_containers,
             'limit_inventory_size': limit_inventory_size,
             'connectivity': connectivity,
+            'topology': topology,
             'seed': seed,
             'timestamp': datetime.now().isoformat()
         }
@@ -1354,7 +1357,8 @@ def main():
         coins_in_containers = _parse_config_value('coins_in_containers', config.get('coins_in_containers', False))
         limit_inventory_size = _parse_config_value('limit_inventory_size', config.get('limit_inventory_size', True))
         connectivity = _parse_config_value('connectivity', config.get('connectivity', 0.5))
-        
+        topology = config.get('topology')
+
         quiet = config.get('quiet', False)
         output_file = config.get('output')
         no_auto_save = config.get('no_auto_save', False)
@@ -1387,6 +1391,7 @@ def main():
                 coins_in_containers=coins_in_containers,
                 limit_inventory_size=limit_inventory_size,
                 connectivity=connectivity,
+                topology=topology,
                 prompt_version=prompt_version,
                 use_pddl=use_pddl,
                 verbose=not quiet,

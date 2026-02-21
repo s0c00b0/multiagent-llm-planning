@@ -1,0 +1,11 @@
+{
+  "id": "5room_01",
+  "num_locations": 5,
+  "num_coins": 1,
+  "seed": 304912982,
+  "connectivity": 0.08,
+  "include_doors": true,
+  "num_distractor_items": 2,
+  "coins_in_containers": false,
+  "topology": "linear"
+}

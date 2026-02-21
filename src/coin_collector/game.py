@@ -49,7 +49,8 @@ class CoinCollectorGame:
         num_coins: int = 1,
         connectivity: float = 0.5,
         coins_in_containers: bool = False,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        topology: Optional[str] = None,
     ):
         if num_locations < 1:
             raise ValueError(f"num_locations must be at least 1, got {num_locations}")
@@ -74,7 +75,8 @@ class CoinCollectorGame:
         self.connectivity = connectivity
         self.coins_in_containers = coins_in_containers
         self.seed = seed
-        
+        self.topology = topology
+
         self.generator = CoinGameGenerator()
         self.locations: List[Room] = []
         self.task_objects: List[FastObject] = []
@@ -109,7 +111,7 @@ class CoinCollectorGame:
         self._random = r
         
         self.locations, self.task_objects = self.generator.mk_environment(
-            r, self.num_locations, self.num_distractor_items, self.include_doors, self.num_coins, self.connectivity, self.coins_in_containers
+            r, self.num_locations, self.num_distractor_items, self.include_doors, self.num_coins, self.connectivity, self.coins_in_containers, topology=self.topology
         )
         
         self.player_locations = [self.locations[0] for _ in range(self.num_players)]

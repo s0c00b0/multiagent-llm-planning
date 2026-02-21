@@ -604,6 +604,7 @@ class LLMGameRunner:
         coins_in_containers: bool = False,
         limit_inventory_size: bool = True,
         connectivity: float = 0.5,
+        topology: Optional[str] = None,
         prompt_version: str = "standard",
         use_pddl: bool = False,
         verbose: bool = True,
@@ -621,7 +622,8 @@ class LLMGameRunner:
             coins_in_containers=coins_in_containers,
             limit_inventory_size=limit_inventory_size,
             connectivity=connectivity,
-            seed=seed
+            seed=seed,
+            topology=topology,
         )
         
         game.reset()
@@ -1135,6 +1137,7 @@ class LLMGameRunner:
             'coins_in_containers': coins_in_containers,
             'limit_inventory_size': limit_inventory_size,
             'connectivity': connectivity,
+            'topology': topology,
             'seed': seed,
             'timestamp': datetime.now().isoformat()
         }
@@ -1187,6 +1190,28 @@ def load_env_file(env_path: str = '.env') -> None:
     elif env_path == '.env':
         print(f"Warning: .env file not found at {env_file.absolute()}")
         print(f"Please create a .env file with your API keys or set environment variables manually.")
+
+
+def load_dataset_configs(base_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    dataset_index = Path(__file__).resolve().parent.parent / "dataset" / "maps" / "index.json"
+    if not dataset_index.exists():
+        raise FileNotFoundError(f"Dataset index not found: {dataset_index}. Run dataset/scripts/build_dataset.py first.")
+    with open(dataset_index) as f:
+        maps = json.load(f)
+    configs = []
+    for entry in maps:
+        c = dict(base_config)
+        c["num_locations"] = entry["num_locations"]
+        c["num_coins"] = entry.get("num_coins", 2)
+        c["seed"] = entry["seed"]
+        c["connectivity"] = entry["connectivity"]
+        c["topology"] = entry.get("topology")
+        c["include_doors"] = entry["include_doors"]
+        c["num_distractor_items"] = entry["num_distractor_items"]
+        c["coins_in_containers"] = entry["coins_in_containers"]
+        c["_dataset_map_id"] = entry["id"]
+        configs.append(c)
+    return configs
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -1315,11 +1340,18 @@ def main():
     
     load_env_file('.env')
     base_config = load_config(args.config)
-    config_combinations = generate_config_combinations(base_config)
-    total_runs = len(config_combinations)
-    
-    print(f"\n=== Running {total_runs} experiment(s) ===")
-    if total_runs > 1:
+    use_dataset = base_config.get('use_dataset', False)
+    if isinstance(use_dataset, str):
+        use_dataset = use_dataset.lower() in ('true', '1', 'yes', 'on')
+    if use_dataset:
+        config_combinations = load_dataset_configs(base_config)
+        total_runs = len(config_combinations)
+        print(f"\n=== Running on dataset: {total_runs} maps ===")
+    else:
+        config_combinations = generate_config_combinations(base_config)
+        total_runs = len(config_combinations)
+        print(f"\n=== Running {total_runs} experiment(s) ===")
+    if total_runs > 1 and not use_dataset:
         print("Multiple parameter combinations detected. Running each sequentially.\n")
     
     exit_code = 0
@@ -1327,7 +1359,10 @@ def main():
     for combo_idx, config in enumerate(config_combinations):
         if total_runs > 1:
             print(f"\n{'='*60}")
-            print(f"Experiment {combo_idx + 1} of {total_runs}")
+            if use_dataset:
+                print(f"Map {combo_idx + 1} of {total_runs}: {config.get('_dataset_map_id', '?')}")
+            else:
+                print(f"Experiment {combo_idx + 1} of {total_runs}")
             print(f"{'='*60}\n")
         
         model = config.get('model')
@@ -1344,7 +1379,8 @@ def main():
         coins_in_containers = _parse_config_value('coins_in_containers', config.get('coins_in_containers', False))
         limit_inventory_size = _parse_config_value('limit_inventory_size', config.get('limit_inventory_size', True))
         connectivity = _parse_config_value('connectivity', config.get('connectivity', 0.5))
-        
+        topology = config.get('topology')
+
         quiet = config.get('quiet', False)
         output_file = config.get('output')
         no_auto_save = config.get('no_auto_save', False)
@@ -1352,7 +1388,10 @@ def main():
         use_pddl = config.get('use_pddl', False)
         if isinstance(use_pddl, str):
             use_pddl = use_pddl.lower() in ('true', '1', 'yes', 'on')
-        run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
+        if use_dataset and config.get('_dataset_map_id'):
+            run_suffix = config['_dataset_map_id']
+        else:
+            run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
         
         try:
             runner = LLMGameRunner(
@@ -1373,6 +1412,7 @@ def main():
                 coins_in_containers=coins_in_containers,
                 limit_inventory_size=limit_inventory_size,
                 connectivity=connectivity,
+                topology=topology,
                 prompt_version=prompt_version,
                 use_pddl=use_pddl,
                 verbose=not quiet,
