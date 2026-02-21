@@ -137,28 +137,44 @@ class CoinCollectorGame:
         actions.append(("inventory", 14, []))
         if player_location.location_north is not None:
             door = player_location.door_north
-            actions.append(("move north", 11, [door, player_location.location_north]))
+            if door is None or door.is_open:
+                actions.append(("move north", 11, [door, player_location.location_north]))
         if player_location.location_south is not None:
             door = player_location.door_south
-            actions.append(("move south", 11, [door, player_location.location_south]))
+            if door is None or door.is_open:
+                actions.append(("move south", 11, [door, player_location.location_south]))
         if player_location.location_east is not None:
             door = player_location.door_east
-            actions.append(("move east", 11, [door, player_location.location_east]))
+            if door is None or door.is_open:
+                actions.append(("move east", 11, [door, player_location.location_east]))
         if player_location.location_west is not None:
             door = player_location.door_west
-            actions.append(("move west", 11, [door, player_location.location_west]))
+            if door is None or door.is_open:
+                actions.append(("move west", 11, [door, player_location.location_west]))
         if player_location.door_north is not None:
-            actions.append(("open door to north", 16, [player_location.door_north, player_location.location_north]))
-            actions.append(("close door to north", 17, [player_location.door_north, player_location.location_north]))
+            door = player_location.door_north
+            if door.is_open:
+                actions.append(("close door to north", 17, [door, player_location.location_north]))
+            else:
+                actions.append(("open door to north", 16, [door, player_location.location_north]))
         if player_location.door_south is not None:
-            actions.append(("open door to south", 16, [player_location.door_south, player_location.location_south]))
-            actions.append(("close door to south", 17, [player_location.door_south, player_location.location_south]))
+            door = player_location.door_south
+            if door.is_open:
+                actions.append(("close door to south", 17, [door, player_location.location_south]))
+            else:
+                actions.append(("open door to south", 16, [door, player_location.location_south]))
         if player_location.door_east is not None:
-            actions.append(("open door to east", 16, [player_location.door_east, player_location.location_east]))
-            actions.append(("close door to east", 17, [player_location.door_east, player_location.location_east]))
+            door = player_location.door_east
+            if door.is_open:
+                actions.append(("close door to east", 17, [door, player_location.location_east]))
+            else:
+                actions.append(("open door to east", 16, [door, player_location.location_east]))
         if player_location.door_west is not None:
-            actions.append(("open door to west", 16, [player_location.door_west, player_location.location_west]))
-            actions.append(("close door to west", 17, [player_location.door_west, player_location.location_west]))
+            door = player_location.door_west
+            if door.is_open:
+                actions.append(("close door to west", 17, [door, player_location.location_west]))
+            else:
+                actions.append(("open door to west", 16, [door, player_location.location_west]))
         
         visible_objects = player_location.collect_visible_objects()
         for obj in visible_objects:

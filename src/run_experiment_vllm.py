@@ -144,10 +144,10 @@ class LLMGameRunner:
             raise ValueError(f"Unsupported model type: {self.model_type}. Use 'vllm' for VLLM models.")
     
     def _load_prompt_template(self, prompt_version: str = "standard") -> str:
-        """Load prompt template from file."""
+        """Load system prompt template from file."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
-        prompt_file = os.path.join(project_root, "prompts", f"{prompt_version}.txt")
+        prompt_file = os.path.join(project_root, "prompts", "system", f"{prompt_version}.txt")
         
         if not os.path.exists(prompt_file):
             print(f"Warning: Prompt file {prompt_file} not found. Using default prompt.")
@@ -161,10 +161,10 @@ class LLMGameRunner:
             return None
     
     def _load_pddl_prompt_template(self) -> Optional[str]:
-        """Load PDDL prompt template from file."""
+        """Load PDDL user prompt template from file."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
-        prompt_file = os.path.join(project_root, "prompts", "pddl.txt")
+        prompt_file = os.path.join(project_root, "prompts", "user", "pddl.txt")
         
         if not os.path.exists(prompt_file):
             print(f"Warning: PDDL prompt file {prompt_file} not found. Using default PDDL prompt.")
@@ -175,6 +175,23 @@ class LLMGameRunner:
                 return f.read()
         except Exception as e:
             print(f"Warning: Error loading PDDL prompt file {prompt_file}: {e}. Using default PDDL prompt.")
+            return None
+    
+    def _load_action_prompt_template(self) -> Optional[str]:
+        """Load non-PDDL (action) user prompt template from file."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        prompt_file = os.path.join(project_root, "prompts", "user", "action.txt")
+        
+        if not os.path.exists(prompt_file):
+            print(f"Warning: Action prompt file {prompt_file} not found. Using default action prompt.")
+            return None
+        
+        try:
+            with open(prompt_file, 'r') as f:
+                return f.read()
+        except Exception as e:
+            print(f"Warning: Error loading action prompt file {prompt_file}: {e}. Using default action prompt.")
             return None
     
     def _create_player_clients(self, num_players: int) -> List[Any]:
@@ -197,12 +214,16 @@ class LLMGameRunner:
                     messages.append({"role": "system", "content": system_prompt})
                     conversation_log.append({"role": "system", "content": system_prompt})
             
-            for msg in conversation_log:
-                if msg.get('role') != 'system':
-                    messages.append({"role": msg['role'], "content": msg['content']})
-            
-            messages.append({"role": "user", "content": prompt})
             conversation_log.append({"role": "user", "content": prompt})
+            
+            last_assistant = None
+            for msg in reversed(conversation_log):
+                if msg.get('role') == 'assistant':
+                    last_assistant = msg
+                    break
+            if last_assistant:
+                messages.append({"role": "assistant", "content": last_assistant['content']})
+            messages.append({"role": "user", "content": prompt})
             
             formatted_prompt = self._format_messages_for_vllm(messages)
             outputs = self._llm.generate([formatted_prompt], self._sampling_params)
@@ -330,7 +351,35 @@ class LLMGameRunner:
         
         return None
     
-    def _create_prompt(self, observation: str, valid_actions: List[str], player_id: int, turn_num: int, num_coins: int, use_pddl: bool = False, feedback: Optional[str] = None) -> str:
+    def _get_same_room_pddl_exchange(
+        self,
+        player_clients: List[Any],
+        current_player: int,
+        last_same_room_when_acted: Dict[int, Any],
+    ) -> str:
+        """Get PDDL problem file from other players who were in the same room when they last acted (communication mode 1).
+        last_same_room_when_acted[player_id] = set of other player ids who were in the same room when player_id last took their turn.
+        """
+        parts = []
+        for other_id in range(len(player_clients)):
+            if other_id == current_player:
+                continue
+            # Include other player's PDDL if current_player was in the same room when other_player last acted
+            same_room_set = last_same_room_when_acted.get(other_id, set())
+            if current_player not in same_room_set:
+                continue
+            conv = player_clients[other_id]['conversation_log']
+            for msg in reversed(conv):
+                if msg.get('role') == 'assistant':
+                    domain, problem = self._extract_pddl_files(msg['content'])
+                    if problem:
+                        parts.append(f"Player {other_id + 1} shares their PDDL problem file:\n```pddl\n{problem}\n```")
+                    break
+        if not parts:
+            return ""
+        return "\n\nSAME-ROOM COMMUNICATION (you were in the same room with the following player(s) on their last turn; they share their PDDL problem file - you may use this to inform your own planning):\n\n" + "\n\n---\n\n".join(parts) + "\n\n"
+    
+    def _create_prompt(self, observation: str, valid_actions: List[str], player_id: int, turn_num: int, num_coins: int, use_pddl: bool = False, feedback: Optional[str] = None, communication_section: str = "") -> str:
         if use_pddl:
             pddl_template = self._load_pddl_prompt_template()
             
@@ -348,6 +397,7 @@ class LLMGameRunner:
                     num_coins=num_coins,
                     turn_num=turn_num,
                     observation=observation,
+                    communication_section=communication_section,
                     valid_actions_list=valid_actions_list,
                     feedback_section=feedback_section
                 )
@@ -356,6 +406,7 @@ class LLMGameRunner:
 
 Current Situation (Turn {turn_num}):
 {observation}
+{communication_section}
 
 Available Actions:
 {valid_actions_list}{feedback_section}
@@ -392,17 +443,28 @@ Respond with:
 ```
 """
         else:
-            prompt = f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
+            valid_actions_list = ""
+            for i, action in enumerate(valid_actions, 1):
+                valid_actions_list += f"{i}. {action}\n"
+            
+            action_template = self._load_action_prompt_template()
+            if action_template:
+                prompt = action_template.format(
+                    player_id=player_id + 1,
+                    num_coins=num_coins,
+                    turn_num=turn_num,
+                    observation=observation,
+                    valid_actions_list=valid_actions_list
+                )
+            else:
+                prompt = f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
 
 Current Situation (Turn {turn_num}):
 {observation}
 
 Available Actions:
-"""
-            for i, action in enumerate(valid_actions, 1):
-                prompt += f"{i}. {action}\n"
-            
-            prompt += """
+{valid_actions_list}
+
 Choose one action from the list above. Respond with ONLY the action text, nothing else.
 Example: "move north" or "take coin1" or "open door to north"
 """
@@ -497,8 +559,10 @@ Example: "move north" or "take coin1" or "open door to north"
         
         return True, None
     
-    def _call_pddl_solver(self, domain: str, problem: str, verbose: bool = False) -> Tuple[Optional[List[str]], Optional[str]]:
-        """Call dual-bfws-ffparser solver via planutils to solve domain and problem."""
+    def _call_pddl_solver(self, domain: str, problem: str, verbose: bool = False, save_error_path: Optional[str] = None) -> Tuple[Optional[List[str]], Optional[str]]:
+        """Call dual-bfws-ffparser solver via planutils to solve domain and problem.
+        When there's an error, save_error_path can be used to log full stdout/stderr to a file.
+        """
         import tempfile
         import os
         import subprocess
@@ -564,13 +628,33 @@ Example: "move north" or "take coin1" or "open door to north"
                             print(f"  Parsed {len(plan_lines)} actions from plan")
                         return plan_lines, None
                     else:
-                        error_msg = "Solver returned success but no plan found"
+                        # Use actual solver output (stdout/stderr) - it often contains the real error
+                        error_msg = (result.stdout or result.stderr or "").strip()
+                        if not error_msg:
+                            error_msg = "Solver returned success but no plan found"
+                        if save_error_path:
+                            with open(save_error_path, 'w') as f:
+                                f.write("=== STDOUT ===\n")
+                                f.write(result.stdout or "(empty)\n")
+                                f.write("\n=== STDERR ===\n")
+                                f.write(result.stderr or "(empty)\n")
+                                f.write(f"\n=== Return code: {result.returncode} ===\n")
+                            if verbose:
+                                print(f"  Solver output logged to: {save_error_path}")
                         if verbose:
-                            print(f"  {error_msg}")
-                            print(f"  Full stdout: {result.stdout}")
+                            print(f"  Solver error (no plan): {error_msg[:500]}")
                         return None, error_msg
                 else:
                     error_msg = result.stderr or result.stdout or f"Return code: {result.returncode}"
+                    if save_error_path:
+                        with open(save_error_path, 'w') as f:
+                            f.write("=== STDOUT ===\n")
+                            f.write(result.stdout or "(empty)\n")
+                            f.write("\n=== STDERR ===\n")
+                            f.write(result.stderr or "(empty)\n")
+                            f.write(f"\n=== Return code: {result.returncode} ===\n")
+                        if verbose:
+                            print(f"  Solver output logged to: {save_error_path}")
                     if verbose:
                         print(f"  dual-bfws-ffparser failed with return code {result.returncode}")
                         if result.stderr:
@@ -603,7 +687,7 @@ Example: "move north" or "take coin1" or "open door to north"
             return None, error_msg
     
     def _parse_plan_action(self, plan_action: str, valid_actions: List[str]) -> Optional[str]:
-        """Parse PDDL plan action (move from to direction) to game action (move direction)."""
+        """Parse PDDL plan action (e.g. OPEN-DOOR room1 room2 NORTH) to game action (open door to north)."""
         action_clean = plan_action.strip().strip('()').strip()
         
         if action_clean in valid_actions:
@@ -613,45 +697,62 @@ Example: "move north" or "take coin1" or "open door to north"
         if not action_parts:
             return None
         
-        action_name = action_parts[0].lower()
+        action_name = action_parts[0].lower().replace('-', '_')
+        action_lower = action_clean.lower()
+        parts_lower = [p.lower().replace('-', '_') for p in action_parts]
+        valid_directions = ['north', 'south', 'east', 'west']
         
-        if action_name == 'move':
-            if len(action_parts) >= 2:
-                direction = action_parts[-1].lower()
-                valid_directions = ['north', 'south', 'east', 'west']
-                if direction in valid_directions:
-                    move_action = f"move {direction}"
-                    if move_action in valid_actions:
-                        return move_action
-                    for valid_action in valid_actions:
-                        if valid_action.lower() == move_action.lower():
-                            return valid_action
-        elif action_name == 'take' or action_name == 'pickup':
-            if len(action_parts) > 1:
-                obj = action_parts[1].lower()
-                take_action = f"take {obj}"
-                if take_action in valid_actions:
-                    return take_action
-        elif action_name == 'open' or action_name == 'open_door':
-            if 'door' in action_clean.lower():
-                if 'north' in action_clean.lower():
-                    return "open door to north" if "open door to north" in valid_actions else None
-                elif 'south' in action_clean.lower():
-                    return "open door to south" if "open door to south" in valid_actions else None
-                elif 'east' in action_clean.lower():
-                    return "open door to east" if "open door to east" in valid_actions else None
-                elif 'west' in action_clean.lower():
-                    return "open door to west" if "open door to west" in valid_actions else None
-        elif action_name == 'close' or action_name == 'close_door':
-            if 'door' in action_clean.lower():
-                if 'north' in action_clean.lower():
-                    return "close door to north" if "close door to north" in valid_actions else None
-                elif 'south' in action_clean.lower():
-                    return "close door to south" if "close door to south" in valid_actions else None
-                elif 'east' in action_clean.lower():
-                    return "close door to east" if "close door to east" in valid_actions else None
-                elif 'west' in action_clean.lower():
-                    return "close door to west" if "close door to west" in valid_actions else None
+        def _extract_direction() -> Optional[str]:
+            if parts_lower and parts_lower[-1] in valid_directions:
+                return parts_lower[-1]
+            for part in parts_lower:
+                if part in valid_directions:
+                    return part
+                for d in valid_directions:
+                    if d in part:
+                        return d
+            return None
+        
+        if 'move' in action_name and len(action_parts) >= 2:
+            direction = _extract_direction()
+            if direction:
+                move_action = f"move {direction}"
+                if move_action in valid_actions:
+                    return move_action
+                for va in valid_actions:
+                    if va.lower() == move_action:
+                        return va
+        elif ('open' in action_name and 'door' in action_name) or (action_name == 'open' and 'door' in action_lower):
+            direction = _extract_direction()
+            if direction:
+                open_door = f"open door to {direction}"
+                if open_door in valid_actions:
+                    return open_door
+                for va in valid_actions:
+                    if va.lower() == open_door:
+                        return va
+        elif ('close' in action_name and 'door' in action_name) or (action_name == 'close' and 'door' in action_lower):
+            direction = _extract_direction()
+            if direction:
+                close_door = f"close door to {direction}"
+                if close_door in valid_actions:
+                    return close_door
+                for va in valid_actions:
+                    if va.lower() == close_door:
+                        return va
+        elif action_name in ('take', 'pick_up', 'pickup') and len(action_parts) > 1:
+            def _norm(s: str) -> str:
+                return s.replace('-', '').replace('_', '')
+            for va in valid_actions:
+                if va.lower().startswith('take '):
+                    obj = va.lower()[5:].strip()
+                    for part in parts_lower[1:]:
+                        if _norm(obj) == _norm(part) or _norm(obj) in _norm(part) or _norm(part) in _norm(obj):
+                            return va
+        elif action_name == 'inventory' or 'inventory' in action_name:
+            for va in valid_actions:
+                if va.lower() == 'inventory':
+                    return va
         
         action_lower = action_clean.lower()
         for valid_action in valid_actions:
@@ -674,10 +775,12 @@ Example: "move north" or "take coin1" or "open door to north"
         connectivity: float = 0.5,
         prompt_version: str = "standard",
         use_pddl: bool = False,
+        communication_mode: int = 0,
         verbose: bool = True,
         auto_save: bool = True,
         output_file: Optional[str] = None,
-        run_dir_suffix: Optional[str] = None
+        run_dir_suffix: Optional[str] = None,
+        output_parent_dir: Optional[Path] = None
     ) -> Tuple[GameStats, Dict[str, Any], Optional[Path]]:
         game = CoinCollectorGame(
             num_locations=num_locations,
@@ -703,7 +806,7 @@ Example: "move north" or "take coin1" or "open door to north"
             print(f"Players: {num_players} (sharing VLLM instance)")
             print(f"Locations: {num_locations}")
             print(f"Coins: {num_coins}")
-            print(f"Doors: {'enabled' if include_doors else 'disabled'}")
+            print(f"Doors: {'start closed' if include_doors else 'start open'}")
             print(f"Distractor items: {num_distractor_items}")
             print(f"Coins in containers: {'enabled' if coins_in_containers else 'disabled'}")
             print(f"Limit inventory size: {'enabled' if limit_inventory_size else 'disabled'}")
@@ -711,6 +814,7 @@ Example: "move north" or "take coin1" or "open door to north"
                 print(f"  Inventory capacity: {num_coins + 1} items")
             print(f"Connectivity: {connectivity}")
             print(f"Max steps per player: {max_steps or 'unlimited'}")
+            print(f"Communication mode: {communication_mode} (0=none, 1=same-room PDDL exchange)")
             print()
         
         player_clients = self._create_player_clients(num_players)
@@ -720,24 +824,35 @@ Example: "move north" or "take coin1" or "open door to north"
             print()
         
         run_dir = None
+        player_log_handles = []
         if auto_save or output_file:
             output_base = Path('out')
             output_base.mkdir(exist_ok=True)
-            
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
-            sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
-            folder_name = f"{sanitized_model_name}_{timestamp}"
-            if run_dir_suffix:
-                folder_name = f"{folder_name}_{run_dir_suffix}"
-            run_dir = output_base / folder_name
-            run_dir.mkdir(exist_ok=True)
+            
+            if output_parent_dir is not None and run_dir_suffix:
+                run_dir = output_parent_dir / run_dir_suffix
+            else:
+                sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
+                sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
+                folder_name = f"{sanitized_model_name}_{timestamp}"
+                if run_dir_suffix:
+                    folder_name = f"{folder_name}_{run_dir_suffix}"
+                run_dir = output_base / folder_name
+            run_dir.mkdir(parents=True, exist_ok=True)
             
             pddl_debug_dir = run_dir / 'pddl_debug'
             pddl_debug_dir.mkdir(exist_ok=True)
+            
+            for player_id in range(num_players):
+                player_path = run_dir / f"player_{player_id + 1}_conversation.txt"
+                fh = open(player_path, 'w')
+                fh.write(f"=== Player {player_id + 1} Live Conversation Log ===\n\n")
+                fh.flush()
+                player_log_handles.append(fh)
         
         max_steps_str = f"{max_steps} steps" if max_steps else "unlimited steps"
-        doors_status = "enabled" if include_doors else "disabled"
+        doors_status = "doors start closed (must open to pass)" if include_doors else "doors start open (pass freely)"
         containers_status = "enabled" if coins_in_containers else "disabled"
         connectivity_desc = "minimal connections" if connectivity <= 0.3 else "maximum connections" if connectivity >= 0.7 else "moderate connections"
         inventory_limit_str = f"enabled (capacity: {num_coins + 1} items)" if limit_inventory_size else "disabled (unlimited)"
@@ -770,7 +885,7 @@ GAME SETTINGS:
 - Number of rooms/locations: {num_locations}
 - Number of coins to collect: {num_coins}
 - Maximum steps per player: {max_steps_str}
-- Doors: {doors_status} (if enabled, you must open doors before moving through them)
+- Doors: {doors_status}
 - Distractor items: {num_distractor_items} (non-coin items in the game)
 - Coins in containers: {containers_status} (if enabled, coins may be hidden inside containers like fridges, drawers, cabinets, etc.)
 - Inventory limit: {inventory_limit_str}
@@ -793,288 +908,373 @@ RESPONSE FORMAT:
         
         turn_num = 0
         max_turns = 200
+        # For communication_mode >= 1: last_same_room_when_acted[player_id] = set of other player ids
+        # who were in the same room when player_id last took their turn. Used to deliver communication
+        # on the recipient's next turn even if the sender has since left.
+        last_same_room_when_acted = {}
         
-        while turn_num < max_turns:
-            current_player = game.current_player
-            turn_num += 1
-            
-            observation = game.get_observation(current_player)
-            valid_actions = [act[0] for act in game.last_valid_actions]
-            
-            if not valid_actions:
-                if verbose:
-                    print(f"Turn {turn_num}: No valid actions available. Game over.")
-                break
-            
-            use_pddl_mode = use_pddl and 'Qwen3-32B' in self.model_name
-            
-            if use_pddl_mode:
-                action = None
-                feedback = None
-                max_pddl_retries = 3
+        try:
+            while turn_num < max_turns:
+                current_player = game.current_player
+                turn_num += 1
                 
-                for retry in range(max_pddl_retries):
-                    prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=True, feedback=feedback)
-                    
-                    if verbose and retry == 0:
-                        print(f"\n--- Turn {turn_num} - Player {current_player + 1} (PDDL Mode) ---")
-                        print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
-                    
-                    llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
-                    llm_response_cleaned = self._strip_reasoning_tokens(llm_response) if llm_response else ""
-                    
+                # Record who is in the same room as current_player at turn start (before any action).
+                # Stored at end of turn so other players receive this player's PDDL on their next turn.
+                player_location = game.player_locations[current_player]
+                same_room_at_turn_start = set()
+                if player_location is not None:
+                    for other_id, other_loc in enumerate(game.player_locations):
+                        if other_id != current_player and other_loc == player_location:
+                            same_room_at_turn_start.add(other_id)
+                
+                observation = game.get_observation(current_player)
+                valid_actions = [act[0] for act in game.last_valid_actions]
+                
+                if not valid_actions:
                     if verbose:
-                        if llm_response:
-                            print(f"LLM Response (PDDL attempt {retry + 1}): {llm_response[:500]}..." if len(llm_response) > 500 else f"LLM Response (PDDL attempt {retry + 1}): {llm_response}")
-                        else:
-                            print(f"LLM Response (PDDL attempt {retry + 1}): [BLANK/EMPTY]")
+                        print(f"Turn {turn_num}: No valid actions available. Game over.")
+                    break
+                
+                use_pddl_mode = use_pddl and 'Qwen3-32B' in self.model_name
+                
+                if use_pddl_mode:
+                    action = None
+                    feedback = None
+                    max_pddl_retries = 3
+                    last_solver_output = None
+                    communication_section = ""
+                    if communication_mode >= 1:
+                        communication_section = self._get_same_room_pddl_exchange(player_clients, current_player, last_same_room_when_acted)
                     
-                    domain, problem = self._extract_pddl_files(llm_response_cleaned)
-                    
-                    if not domain or not problem:
-                        missing = []
-                        if not domain:
-                            missing.append("domain")
-                        if not problem:
-                            missing.append("problem")
-                        feedback = f"ERROR: Could not extract PDDL {', '.join(missing)} file(s) from your response. Please provide both domain and problem files in the specified format. Make sure to include:\n- ```pddl\n(define (domain ...)\n  ...\n)\n```\n- ```pddl\n(define (problem ...)\n  ...\n)\n```"
+                    for retry in range(max_pddl_retries):
+                        prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=True, feedback=feedback, communication_section=communication_section)
+                        
+                        if verbose and retry == 0:
+                            print(f"\n--- Turn {turn_num} - Player {current_player + 1} (PDDL Mode) ---")
+                            print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
+                        
+                        llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
+                        llm_response_cleaned = self._strip_reasoning_tokens(llm_response) if llm_response else ""
+                        
                         if verbose:
-                            print(f"Warning: Failed to extract PDDL files (attempt {retry + 1}/{max_pddl_retries})")
-                            print(f"  Domain found: {domain is not None}")
-                            print(f"  Problem found: {problem is not None}")
-                            if verbose and llm_response:
-                                print(f"  Response preview (first 500 chars): {llm_response[:500]}")
-                        if retry < max_pddl_retries - 1:
-                            continue
-                        else:
-                            break
-                    
-                    if verbose:
-                        print(f"Extracted PDDL domain ({len(domain)} chars) and problem ({len(problem)} chars)")
-                    
-                    if verbose:
-                        print(f"Validating PDDL syntax...")
-                    pddl_debug_dir = run_dir / 'pddl_debug' if run_dir else None
-                    is_valid, syntax_error = self._validate_pddl_syntax(domain, problem, verbose=verbose, save_dir=pddl_debug_dir, turn_num=turn_num, attempt=retry+1)
-                    
-                    if not is_valid:
-                        feedback = f"ERROR: PDDL syntax validation failed. {syntax_error}. Please check your domain and problem files for syntax errors like missing parentheses, undefined predicates/actions, or invalid PDDL structure."
-                        if verbose:
-                            print(f"  PDDL syntax error: {syntax_error}")
-                            if pddl_debug_dir:
-                                print(f"  Full PDDL files saved to: {pddl_debug_dir}")
+                            if llm_response:
+                                print(f"LLM Response (PDDL attempt {retry + 1}): {llm_response[:500]}..." if len(llm_response) > 500 else f"LLM Response (PDDL attempt {retry + 1}): {llm_response}")
                             else:
-                                print(f"  Domain preview: {domain[:300]}...")
-                                print(f"  Problem preview: {problem[:300]}...")
-                        if retry < max_pddl_retries - 1:
-                            continue
-                        else:
-                            break
-                    
-                    if pddl_debug_dir and verbose:
-                        domain_save_path = pddl_debug_dir / f"domain_turn{turn_num}_attempt{retry+1}_valid.pddl"
-                        problem_save_path = pddl_debug_dir / f"problem_turn{turn_num}_attempt{retry+1}_valid.pddl"
-                        with open(domain_save_path, 'w') as f:
-                            f.write(domain)
-                        with open(problem_save_path, 'w') as f:
-                            f.write(problem)
-                        if verbose:
-                            print(f"  PDDL files saved: {domain_save_path.name}, {problem_save_path.name}")
-                    
-                    if verbose:
-                        print(f"Calling PDDL solver with domain ({len(domain)} chars) and problem ({len(problem)} chars)...")
-                    
-                    debug_dir = None
-                    if verbose:
-                        import tempfile
-                        debug_dir = tempfile.mkdtemp(prefix='pddl_debug_')
-                        domain_debug_file = os.path.join(debug_dir, f'domain_turn{turn_num}_attempt{retry+1}.pddl')
-                        problem_debug_file = os.path.join(debug_dir, f'problem_turn{turn_num}_attempt{retry+1}.pddl')
-                        with open(domain_debug_file, 'w') as f:
-                            f.write(domain)
-                        with open(problem_debug_file, 'w') as f:
-                            f.write(problem)
-                        if verbose:
-                            print(f"  Debug: Domain saved to {domain_debug_file}")
-                            print(f"  Debug: Problem saved to {problem_debug_file}")
-                    
-                    plan, solver_error = self._call_pddl_solver(domain, problem, verbose=verbose)
-                    
-                    if plan is None or len(plan) == 0:
-                        error_details = []
-                        if solver_error:
-                            error_details.append(f"Solver error: {solver_error[:500]}")
+                                print(f"LLM Response (PDDL attempt {retry + 1}): [BLANK/EMPTY]")
                         
-                        error_details.append(f"Domain length: {len(domain)} chars, Problem length: {len(problem)} chars")
-                        if debug_dir:
-                            error_details.append(f"Domain and problem files saved to: {debug_dir}")
+                        domain, problem = self._extract_pddl_files(llm_response_cleaned)
                         
-                        feedback = f"ERROR: PDDL solver failed or returned no plan. {' '.join(error_details)}. Please check your domain and problem files for syntax errors. Common issues: missing parentheses, undefined predicates/actions, type mismatches, or invalid PDDL syntax."
-                        
-                        if verbose:
-                            print(f"Warning: PDDL solver failed (attempt {retry + 1}/{max_pddl_retries})")
-                            print(f"  Domain preview (first 500 chars):\n{domain[:500]}")
-                            print(f"  Problem preview (first 500 chars):\n{problem[:500]}")
-                            if solver_error:
-                                print(f"  Solver error output:\n{solver_error[:1000]}")
-                        if retry < max_pddl_retries - 1:
-                            continue
-                        else:
-                            break
-                    
-                    if verbose:
-                        print(f"PDDL Plan received: {plan[:3]}..." if len(plan) > 3 else f"PDDL Plan: {plan}")
-                    
-                    first_plan_action = plan[0] if plan else None
-                    if first_plan_action:
-                        if verbose:
-                            print(f"  Parsing plan action: '{first_plan_action}'")
-                        action = self._parse_plan_action(first_plan_action, valid_actions)
-                        
-                        if action and action in valid_actions:
+                        if not domain or not problem:
+                            missing = []
+                            if not domain:
+                                missing.append("domain")
+                            if not problem:
+                                missing.append("problem")
+                            feedback = f"ERROR: Could not extract PDDL {', '.join(missing)} file(s) from your response. Please provide both domain and problem files in the specified format. Make sure to include:\n- ```pddl\n(define (domain ...)\n  ...\n)\n```\n- ```pddl\n(define (problem ...)\n  ...\n)\n```"
+                            if player_log_handles:
+                                log_fh = player_log_handles[current_player]
+                                conv = player_clients[current_player]['conversation_log']
+                                if retry == 0 and communication_section:
+                                    log_fh.write(f"[COMMUNICATION]\n{communication_section}\n\n")
+                                if len(conv) >= 2:
+                                    for msg in conv[-2:]:
+                                        role = msg['role'].upper()
+                                        content = msg['content']
+                                        log_fh.write(f"[{role}]\n{content}\n\n")
+                                log_fh.write(f"[PDDL SOLVER]\nSolver error: Could not extract {', '.join(missing)} file(s)\n\n")
+                                log_fh.flush()
                             if verbose:
-                                print(f"  Parsed action from plan: '{action}'")
-                            break
-                        else:
-                            if verbose:
-                                print(f"  Failed to parse action. Raw action: '{first_plan_action}', Parsed: '{action}', Valid actions: {valid_actions}")
-                            feedback = f"ERROR: The first action in the plan '{first_plan_action}' could not be converted to a valid game action. The PDDL plan action format is fine, but it needs to match game actions like 'move north', 'move south', 'take coin1', etc. Valid actions are: {', '.join(valid_actions)}."
-                            if verbose:
-                                print(f"Warning: Invalid action '{first_plan_action}' (attempt {retry + 1}/{max_pddl_retries})")
+                                print(f"Warning: Failed to extract PDDL files (attempt {retry + 1}/{max_pddl_retries})")
+                                print(f"  Domain found: {domain is not None}")
+                                print(f"  Problem found: {problem is not None}")
+                                if verbose and llm_response:
+                                    print(f"  Response preview (first 500 chars): {llm_response[:500]}")
                             if retry < max_pddl_retries - 1:
                                 continue
                             else:
                                 break
-                    else:
-                        feedback = "ERROR: Plan is empty. Please check your PDDL domain and problem files."
+                        
                         if verbose:
-                            print(f"Warning: Empty plan (attempt {retry + 1}/{max_pddl_retries})")
-                        if retry < max_pddl_retries - 1:
-                            continue
+                            print(f"Extracted PDDL domain ({len(domain)} chars) and problem ({len(problem)} chars)")
+                        
+                        if verbose:
+                            print(f"Validating PDDL syntax...")
+                        pddl_debug_dir = run_dir / 'pddl_debug' if run_dir else None
+                        is_valid, syntax_error = self._validate_pddl_syntax(domain, problem, verbose=verbose, save_dir=pddl_debug_dir, turn_num=turn_num, attempt=retry+1)
+                        
+                        if not is_valid:
+                            feedback = f"ERROR: PDDL syntax validation failed. {syntax_error}. Please check your domain and problem files for syntax errors like missing parentheses, undefined predicates/actions, or invalid PDDL structure."
+                            if player_log_handles:
+                                log_fh = player_log_handles[current_player]
+                                conv = player_clients[current_player]['conversation_log']
+                                if retry == 0 and communication_section:
+                                    log_fh.write(f"[COMMUNICATION]\n{communication_section}\n\n")
+                                if len(conv) >= 2:
+                                    for msg in conv[-2:]:
+                                        role = msg['role'].upper()
+                                        content = msg['content']
+                                        log_fh.write(f"[{role}]\n{content}\n\n")
+                                log_fh.write(f"[PDDL SOLVER]\nSolver error: PDDL syntax validation failed. {syntax_error}\n\n")
+                                log_fh.flush()
+                            if verbose:
+                                print(f"  PDDL syntax error: {syntax_error}")
+                                if pddl_debug_dir:
+                                    print(f"  Full PDDL files saved to: {pddl_debug_dir}")
+                                else:
+                                    print(f"  Domain preview: {domain[:300]}...")
+                                    print(f"  Problem preview: {problem[:300]}...")
+                            if retry < max_pddl_retries - 1:
+                                continue
+                            else:
+                                break
+                        
+                        if pddl_debug_dir and verbose:
+                            domain_save_path = pddl_debug_dir / f"domain_turn{turn_num}_attempt{retry+1}_valid.pddl"
+                            problem_save_path = pddl_debug_dir / f"problem_turn{turn_num}_attempt{retry+1}_valid.pddl"
+                            with open(domain_save_path, 'w') as f:
+                                f.write(domain)
+                            with open(problem_save_path, 'w') as f:
+                                f.write(problem)
+                            if verbose:
+                                print(f"  PDDL files saved: {domain_save_path.name}, {problem_save_path.name}")
+                        
+                        if verbose:
+                            print(f"Calling PDDL solver with domain ({len(domain)} chars) and problem ({len(problem)} chars)...")
+                        
+                        debug_dir = None
+                        if verbose:
+                            import tempfile
+                            debug_dir = tempfile.mkdtemp(prefix='pddl_debug_')
+                            domain_debug_file = os.path.join(debug_dir, f'domain_turn{turn_num}_attempt{retry+1}.pddl')
+                            problem_debug_file = os.path.join(debug_dir, f'problem_turn{turn_num}_attempt{retry+1}.pddl')
+                            with open(domain_debug_file, 'w') as f:
+                                f.write(domain)
+                            with open(problem_debug_file, 'w') as f:
+                                f.write(problem)
+                            if verbose:
+                                print(f"  Debug: Domain saved to {domain_debug_file}")
+                                print(f"  Debug: Problem saved to {problem_debug_file}")
+                        
+                        solver_output_path = None
+                        if pddl_debug_dir:
+                            solver_output_path = str(pddl_debug_dir / f"solver_output_turn{turn_num}_attempt{retry+1}.txt")
+                        plan, solver_error = self._call_pddl_solver(domain, problem, verbose=verbose, save_error_path=solver_output_path)
+                        last_solver_output = "Plan:\n" + "\n".join(plan) if plan else ("Solver error: " + (solver_error or "unknown"))
+                        
+                        if player_log_handles:
+                            log_fh = player_log_handles[current_player]
+                            conv = player_clients[current_player]['conversation_log']
+                            if retry == 0 and communication_section:
+                                log_fh.write(f"[COMMUNICATION]\n{communication_section}\n\n")
+                            if len(conv) >= 2:
+                                for msg in conv[-2:]:
+                                    role = msg['role'].upper()
+                                    content = msg['content']
+                                    log_fh.write(f"[{role}]\n{content}\n\n")
+                            log_fh.write(f"[PDDL SOLVER]\n{last_solver_output}\n\n")
+                            log_fh.flush()
+                        
+                        if plan is None or len(plan) == 0:
+                            error_details = []
+                            if solver_error:
+                                error_details.append(f"Solver error: {solver_error[:500]}")
+                            
+                            error_details.append(f"Domain length: {len(domain)} chars, Problem length: {len(problem)} chars")
+                            if debug_dir:
+                                error_details.append(f"Domain and problem files saved to: {debug_dir}")
+                            
+                            feedback = f"ERROR: PDDL solver failed or returned no plan. {' '.join(error_details)}. Please check your domain and problem files for syntax errors. Common issues: missing parentheses, undefined predicates/actions, type mismatches, or invalid PDDL syntax."
+                            
+                            if verbose:
+                                print(f"Warning: PDDL solver failed (attempt {retry + 1}/{max_pddl_retries})")
+                                print(f"  Domain preview (first 500 chars):\n{domain[:500]}")
+                                print(f"  Problem preview (first 500 chars):\n{problem[:500]}")
+                                if solver_error:
+                                    print(f"  Solver error output:\n{solver_error[:1000]}")
+                            if retry < max_pddl_retries - 1:
+                                continue
+                            else:
+                                break
+                        
+                        if verbose:
+                            print(f"PDDL Plan received: {plan[:3]}..." if len(plan) > 3 else f"PDDL Plan: {plan}")
+                        
+                        first_plan_action = plan[0] if plan else None
+                        if first_plan_action:
+                            if verbose:
+                                print(f"  Parsing plan action: '{first_plan_action}'")
+                            action = self._parse_plan_action(first_plan_action, valid_actions)
+                            
+                            if action and action in valid_actions:
+                                if verbose:
+                                    print(f"  Parsed action from plan: '{action}'")
+                                break
+                            else:
+                                if verbose:
+                                    print(f"  Failed to parse action. Raw action: '{first_plan_action}', Parsed: '{action}', Valid actions: {valid_actions}")
+                                feedback = f"ERROR: The first action in the plan '{first_plan_action}' could not be converted to a valid game action. The PDDL plan action format is fine, but it needs to match game actions like 'move north', 'move south', 'take coin1', etc. Valid actions are: {', '.join(valid_actions)}."
+                                if verbose:
+                                    print(f"Warning: Invalid action '{first_plan_action}' (attempt {retry + 1}/{max_pddl_retries})")
+                                if retry < max_pddl_retries - 1:
+                                    continue
+                                else:
+                                    break
                         else:
-                            break
+                            feedback = "ERROR: Plan is empty. Please check your PDDL domain and problem files."
+                            if verbose:
+                                print(f"Warning: Empty plan (attempt {retry + 1}/{max_pddl_retries})")
+                            if retry < max_pddl_retries - 1:
+                                continue
+                            else:
+                                break
+                    
+                    if action is None:
+                        if verbose:
+                            print(f"Warning: Failed to get valid action after {max_pddl_retries} PDDL attempts. Falling back to standard action extraction.")
+                        action = self._extract_action(llm_response, valid_actions)
+                    
+                    if player_log_handles:
+                        log_fh = player_log_handles[current_player]
+                        log_fh.write(f"[PARSED ACTION]\n{action or '(failed)'}\n\n")
+                        log_fh.flush()
+                else:
+                    prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=False)
+                    
+                    if verbose:
+                        print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
+                        print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
+                    
+                    llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
+                    
+                    if verbose:
+                        if llm_response:
+                            print(f"LLM Response: {llm_response}")
+                        else:
+                            print(f"LLM Response: [BLANK/EMPTY]")
+                    
+                    if player_log_handles:
+                        log_fh = player_log_handles[current_player]
+                        conv = player_clients[current_player]['conversation_log']
+                        if len(conv) >= 2:
+                            for msg in conv[-2:]:
+                                role = msg['role'].upper()
+                                content = msg['content']
+                                log_fh.write(f"[{role}]\n{content}\n\n")
+                        log_fh.flush()
+                    
+                    action = self._extract_action(llm_response, valid_actions)
                 
                 if action is None:
                     if verbose:
-                        print(f"Warning: Failed to get valid action after {max_pddl_retries} PDDL attempts. Falling back to standard action extraction.")
-                    action = self._extract_action(llm_response, valid_actions)
-            else:
-                prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=False)
+                        if llm_response:
+                            print(f"Warning: Could not extract valid action from response '{llm_response}'. Skipping turn.")
+                        else:
+                            print(f"Warning: LLM returned blank/empty response. Skipping turn.")
+                    
+                    game.current_player = (current_player + 1) % num_players
+                    game._generate_valid_actions(game.current_player)
+                    continue
                 
                 if verbose:
-                    print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
-                    print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
+                    print(f"Selected Action: {action}")
                 
-                llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
+                obs, reward, done, info = game.step(action)
+                
+                # Record who was in same room when this player acted (for communication on others' next turns)
+                last_same_room_when_acted[current_player] = same_room_at_turn_start
+                
+                stats.total_turns = turn_num
+                stats.player_turns.append(current_player)
+                stats.player_actions[current_player].append(action)
+                stats.final_score = info['scoreNormalized']
                 
                 if verbose:
-                    if llm_response:
-                        print(f"LLM Response: {llm_response}")
-                    else:
-                        print(f"LLM Response: [BLANK/EMPTY]")
+                    print(f"Reward: {reward}")
+                    print(f"Score: {info['scoreNormalized']:.2f} ({info['scoreRaw']}/{len(game.task_objects)})")
+                    print(f"Player steps: {info['playerSteps']}")
                 
-                action = self._extract_action(llm_response, valid_actions)
-            
-            if action is None:
-                if verbose:
-                    if llm_response:
-                        print(f"Warning: Could not extract valid action from response '{llm_response}'. Skipping turn.")
-                    else:
-                        print(f"Warning: LLM returned blank/empty response. Skipping turn.")
-                
-                game.current_player = (current_player + 1) % num_players
-                game._generate_valid_actions(game.current_player)
-                continue
+                if done:
+                    stats.game_won = info['taskSuccess']
+                    if verbose:
+                        if stats.game_won:
+                            print(f"\nGame Won! All players collected all coins together!")
+                        else:
+                            print(f"\nGame ended (step limit reached)")
+                    break
             
             if verbose:
-                print(f"Selected Action: {action}")
+                print(f"\n=== Game Summary ===")
+                print(f"Total turns: {stats.total_turns}")
+                print(f"Game won: {stats.game_won}")
+                if stats.game_won:
+                    print(f"All players won together!")
+                print(f"Final score: {stats.final_score:.2f}")
+                print(f"Actions per player:")
+                for i, actions in enumerate(stats.player_actions):
+                    print(f"  Player {i + 1}: {len(actions)} actions")
             
-            obs, reward, done, info = game.step(action)
+            game_info = {
+                'total_turns': stats.total_turns,
+                'game_won': stats.game_won,
+                'final_score': stats.final_score,
+                'player_actions': stats.player_actions,
+                'player_steps': info['playerSteps'] if 'playerSteps' in locals() else [],
+                'model_type': self.model_type,
+                'model_name': self.model_name,
+                'num_locations': num_locations,
+                'num_coins': num_coins,
+                'num_players': num_players,
+                'max_steps': max_steps,
+                'include_doors': include_doors,
+                'num_distractor_items': num_distractor_items,
+                'coins_in_containers': coins_in_containers,
+                'limit_inventory_size': limit_inventory_size,
+                'connectivity': connectivity,
+                'seed': seed,
+                'timestamp': datetime.now().isoformat()
+            }
             
-            stats.total_turns = turn_num
-            stats.player_turns.append(current_player)
-            stats.player_actions[current_player].append(action)
-            stats.final_score = info['scoreNormalized']
-            
-            if verbose:
-                print(f"Reward: {reward}")
-                print(f"Score: {info['scoreNormalized']:.2f} ({info['scoreRaw']}/{len(game.task_objects)})")
-                print(f"Player steps: {info['playerSteps']}")
-            
-            if done:
-                stats.game_won = info['taskSuccess']
-                if verbose:
-                    if stats.game_won:
-                        print(f"\nGame Won! All players collected all coins together!")
-                    else:
-                        print(f"\nGame ended (step limit reached)")
-                break
-        
-        if verbose:
-            print(f"\n=== Game Summary ===")
-            print(f"Total turns: {stats.total_turns}")
-            print(f"Game won: {stats.game_won}")
-            if stats.game_won:
-                print(f"All players won together!")
-            print(f"Final score: {stats.final_score:.2f}")
-            print(f"Actions per player:")
-            for i, actions in enumerate(stats.player_actions):
-                print(f"  Player {i + 1}: {len(actions)} actions")
-        
-        game_info = {
-            'total_turns': stats.total_turns,
-            'game_won': stats.game_won,
-            'final_score': stats.final_score,
-            'player_actions': stats.player_actions,
-            'player_steps': info['playerSteps'] if 'playerSteps' in locals() else [],
-            'model_type': self.model_type,
-            'model_name': self.model_name,
-            'num_locations': num_locations,
-            'num_coins': num_coins,
-            'num_players': num_players,
-            'max_steps': max_steps,
-            'include_doors': include_doors,
-            'num_distractor_items': num_distractor_items,
-            'coins_in_containers': coins_in_containers,
-            'limit_inventory_size': limit_inventory_size,
-            'connectivity': connectivity,
-            'seed': seed,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        if run_dir:
-            if output_file:
-                json_path = run_dir / Path(output_file).name
-            else:
-                json_filename = f"game_{self.model_type}_{timestamp}.json"
-                json_path = run_dir / json_filename
-            
-            with open(json_path, 'w') as f:
-                json.dump(game_info, f, indent=2)
-            
-            for player_id in range(num_players):
-                player_log = player_clients[player_id]['conversation_log']
-                player_filename = f"player_{player_id + 1}_conversation.txt"
-                player_path = run_dir / player_filename
-                
-                with open(player_path, 'w') as f:
-                    f.write(f"=== Player {player_id + 1} Complete Conversation Log ===\n\n")
-                    for msg in player_log:
-                        role = msg['role'].upper()
-                        content = msg['content']
-                        f.write(f"[{role}]\n{content}\n\n")
-            
-            if verbose:
+            if run_dir:
                 if output_file:
-                    print(f"\nResults saved to directory: {run_dir}")
-                    print(f"  - Game results: {Path(output_file).name}")
+                    json_path = run_dir / Path(output_file).name
                 else:
-                    print(f"\nResults automatically saved to directory: {run_dir}")
-                    print(f"  - Game results: {json_path.name}")
+                    json_filename = f"game_{self.model_type}_{timestamp}.json"
+                    json_path = run_dir / json_filename
+                
+                with open(json_path, 'w') as f:
+                    json.dump(game_info, f, indent=2)
+                
                 for player_id in range(num_players):
-                    print(f"  - Player {player_id + 1} log: player_{player_id + 1}_conversation.txt")
-        
-        return stats, game_info, run_dir
+                    player_filename = f"player_{player_id + 1}_conversation.txt"
+                    player_path = run_dir / player_filename
+                    # Only overwrite if we didn't do live logging (player_log_handles was empty)
+                    # Live logs already contain [PDDL SOLVER], [PARSED ACTION], [COMMUNICATION]
+                    if not player_log_handles:
+                        player_log = player_clients[player_id]['conversation_log']
+                        with open(player_path, 'w') as f:
+                            f.write(f"=== Player {player_id + 1} Complete Conversation Log ===\n\n")
+                            for msg in player_log:
+                                role = msg['role'].upper()
+                                content = msg['content']
+                                f.write(f"[{role}]\n{content}\n\n")
+                
+                if verbose:
+                    if output_file:
+                        print(f"\nResults saved to directory: {run_dir}")
+                        print(f"  - Game results: {Path(output_file).name}")
+                    else:
+                        print(f"\nResults automatically saved to directory: {run_dir}")
+                        print(f"  - Game results: {json_path.name}")
+                    for player_id in range(num_players):
+                        print(f"  - Player {player_id + 1} log: player_{player_id + 1}_conversation.txt")
+            
+            return stats, game_info, run_dir
+        finally:
+            for fh in player_log_handles:
+                try:
+                    fh.close()
+                except (IOError, OSError):
+                    pass
 
 
 def load_env_file(env_path: str = '.env') -> None:
@@ -1108,6 +1308,43 @@ def load_config(config_path: str) -> Dict[str, Any]:
     except yaml.YAMLError as e:
         print(f"Error parsing YAML config: {e}")
         sys.exit(1)
+
+
+def load_dataset_configs(
+    dataset_dir: str,
+    base_config: Dict[str, Any],
+    config_path: str,
+) -> List[Tuple[Dict[str, Any], str]]:
+    """
+    Load configs from dataset maps. Returns list of (config, map_id) tuples.
+    Map options (seed, connectivity, num_locations, etc.) override base_config.
+    """
+    dataset_path = Path(dataset_dir)
+    if not dataset_path.is_absolute():
+        config_dir = Path(config_path).resolve().parent
+        dataset_path = config_dir / dataset_dir
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_path}")
+    map_dirs = sorted(
+        d for d in dataset_path.iterdir()
+        if d.is_dir() and d.name.startswith("map_") and (d / "meta.json").exists()
+    )
+    if not map_dirs:
+        raise FileNotFoundError(f"No map directories with meta.json found in {dataset_path}")
+    result = []
+    for map_dir in map_dirs:
+        with open(map_dir / "meta.json", "r") as f:
+            meta = json.load(f)
+        config = dict(base_config)
+        config["num_locations"] = meta.get("num_rooms", config.get("num_locations", 15))
+        config["num_coins"] = meta.get("num_coins", config.get("num_coins", 3))
+        config["seed"] = meta.get("seed", config.get("seed"))
+        config["connectivity"] = meta.get("connectivity", config.get("connectivity", 0.5))
+        config["num_distractor_items"] = meta.get("num_distractor_items", config.get("num_distractor_items", 0))
+        config["include_doors"] = meta.get("include_doors", config.get("include_doors", True))
+        config["coins_in_containers"] = meta.get("coins_in_containers", config.get("coins_in_containers", False))
+        result.append((config, map_dir.name))
+    return result
 
 
 def generate_config_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1223,7 +1460,19 @@ def main():
     load_env_file('.env')
     base_config = load_config(args.config)
     
-    config_combinations = generate_config_combinations(base_config)
+    use_dataset = base_config.get('use_dataset', False)
+    if isinstance(use_dataset, str):
+        use_dataset = use_dataset.lower() in ('true', '1', 'yes', 'on')
+    
+    if use_dataset:
+        dataset_dir = base_config.get('dataset_dir', 'dataset')
+        dataset_configs = load_dataset_configs(dataset_dir, base_config, args.config)
+        config_combinations = [c for c, _ in dataset_configs]
+        map_ids = [mid for _, mid in dataset_configs]
+    else:
+        config_combinations = generate_config_combinations(base_config)
+        map_ids = [None] * len(config_combinations)
+    
     total_runs = len(config_combinations)
     
     print(f"\n=== Running {total_runs} experiment(s) ===")
@@ -1231,6 +1480,19 @@ def main():
         print("Multiple parameter combinations detected. Running each sequentially.\n")
     
     exit_code = 0
+    runner = None
+    current_model_key = None
+    output_parent_dir = None
+    if use_dataset and total_runs > 0:
+        output_base = Path('out')
+        output_base.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        model_name = config_combinations[0].get('model_name', 'Qwen/Qwen3-32B')
+        sanitized_model_name = model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
+        sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
+        output_parent_dir = output_base / f"{sanitized_model_name}_{timestamp}"
+        output_parent_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Dataset output directory: {output_parent_dir}\n")
     
     for combo_idx, config in enumerate(config_combinations):
         if total_runs > 1:
@@ -1260,20 +1522,44 @@ def main():
         use_pddl = config.get('use_pddl', False)
         if isinstance(use_pddl, str):
             use_pddl = use_pddl.lower() in ('true', '1', 'yes', 'on')
+        communication_mode = config.get('communication_mode', 0)
+        if isinstance(communication_mode, str):
+            try:
+                communication_mode = int(communication_mode)
+            except ValueError:
+                communication_mode = 0
         
         if use_pddl and 'Qwen3-32B' not in model_name:
             print(f"Warning: use_pddl is enabled but model '{model_name}' is not Qwen3-32B. PDDL mode only works with Qwen3-32B. Disabling PDDL mode.")
             use_pddl = False
         
-        run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
+        if use_dataset and map_ids[combo_idx]:
+            run_suffix = map_ids[combo_idx]
+        else:
+            run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
         
-        try:
+        model_key = (model, model_name)
+        if runner is None or model_key != current_model_key:
+            if runner is not None and model_key != current_model_key:
+                try:
+                    del runner._llm
+                    runner._llm = None
+                except Exception:
+                    pass
+                try:
+                    import torch
+                    if hasattr(torch, 'cuda') and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
             runner = LLMGameRunner(
                 model_type=model,
                 model_name=model_name,
                 api_params=api_params
             )
-            
+            current_model_key = model_key
+        
+        try:
             stats, game_info, run_dir = runner.run_game(
                 num_locations=num_locations,
                 num_coins=num_coins,
@@ -1287,10 +1573,12 @@ def main():
                 connectivity=connectivity,
                 prompt_version=prompt_version,
                 use_pddl=use_pddl,
+                communication_mode=communication_mode,
                 verbose=not quiet,
                 auto_save=not no_auto_save,
                 output_file=output_file,
-                run_dir_suffix=run_suffix
+                run_dir_suffix=run_suffix,
+                output_parent_dir=output_parent_dir if use_dataset else None
             )
             
             if run_dir:

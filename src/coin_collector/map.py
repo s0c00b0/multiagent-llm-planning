@@ -36,11 +36,25 @@ class DoorMaker:
         ]:
             self._add_to_lut(loc1, loc2, generic_doors)
     
+    def _base_room_name(self, name: str) -> str:
+        """Get base room name for door lookup (e.g. 'kitchen 2' -> 'kitchen')."""
+        parts = name.rsplit(' ', 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return parts[0]
+        return name
+    
     def mk_door(self, r: random.Random, location1: str, location2: str, is_open: bool) -> Optional[Door]:
         key1 = self._mk_key(location1, location2)
         key2 = self._mk_key(location2, location1)
         
         key = key1 if key1 in self.lut else key2
+        if key not in self.lut:
+            base1 = self._base_room_name(location1)
+            base2 = self._base_room_name(location2)
+            if base1 != location1 or base2 != location2:
+                key1 = self._mk_key(base1, base2)
+                key2 = self._mk_key(base2, base1)
+                key = key1 if key1 in self.lut else key2
         if key not in self.lut:
             return None
         
@@ -399,36 +413,29 @@ class CoinGameGenerator:
         for direction, i, j, cell, query_loc, prefers in all_edges:
             edge_key = tuple(sorted([cell.name, query_loc.name]))
             if edge_key in edges_to_add:
+                door = self.door_maker.mk_door(r, cell.name, query_loc.name, is_open=not include_doors)
+                if door is None:
+                    # No door in LUT: use generic door that starts open (functionally same as no door)
+                    # Use fixed "wood door" to avoid consuming RNG and changing coin placement
+                    door = Door("wood door", is_open=True)
                 if direction == 'north':
                     cell.location_north = query_loc
                     query_loc.location_south = cell
-                    if include_doors:
-                        door = self.door_maker.mk_door(r, cell.name, query_loc.name, is_open=False)
-                        if door is not None:
-                            cell.door_north = door
-                            query_loc.door_south = door
+                    cell.door_north = door
+                    query_loc.door_south = door
                 elif direction == 'south':
                     cell.location_south = query_loc
                     query_loc.location_north = cell
-                    if include_doors:
-                        door = self.door_maker.mk_door(r, cell.name, query_loc.name, is_open=False)
-                        if door is not None:
-                            cell.door_south = door
-                            query_loc.door_north = door
+                    cell.door_south = door
+                    query_loc.door_north = door
                 elif direction == 'east':
                     cell.location_east = query_loc
                     query_loc.location_west = cell
-                    if include_doors:
-                        door = self.door_maker.mk_door(r, cell.name, query_loc.name, is_open=False)
-                        if door is not None:
-                            cell.door_east = door
-                            query_loc.door_west = door
+                    cell.door_east = door
+                    query_loc.door_west = door
                 elif direction == 'west':
                     cell.location_west = query_loc
                     query_loc.location_east = cell
-                    if include_doors:
-                        door = self.door_maker.mk_door(r, cell.name, query_loc.name, is_open=False)
-                        if door is not None:
-                            cell.door_west = door
-                            query_loc.door_east = door
+                    cell.door_west = door
+                    query_loc.door_east = door
 

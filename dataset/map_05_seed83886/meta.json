@@ -1,0 +1,36 @@
+{
+  "seed": 83886,
+  "connectivity": 0.64,
+  "num_rooms": 15,
+  "num_coins": 3,
+  "num_distractor_items": 3,
+  "include_doors": true,
+  "coins_in_containers": false,
+  "topology_stats": {
+    "num_edges": 15,
+    "num_cycles": 1,
+    "max_degree": 4,
+    "diameter": 7
+  },
+  "coin_spread": {
+    "min_dist_from_start": 4,
+    "min_pairwise_dist": 2
+  },
+  "room_names": [
+    "kitchen",
+    "pantry",
+    "corridor",
+    "bedroom",
+    "backyard",
+    "living room",
+    "bathroom",
+    "laundry room",
+    "driveway",
+    "street",
+    "supermarket",
+    "kitchen 2",
+    "pantry 2",
+    "corridor 2",
+    "bedroom 2"
+  ]
+}

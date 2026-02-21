@@ -87,10 +87,10 @@ class LLMGameRunner:
                 raise ImportError("google-generativeai package not installed. Install with: pip install google-generativeai")
     
     def _load_prompt_template(self, prompt_version: str = "standard") -> str:
-        """Load prompt template from file."""
+        """Load system prompt template from file."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
-        prompt_file = os.path.join(project_root, "prompts", f"{prompt_version}.txt")
+        prompt_file = os.path.join(project_root, "prompts", "system", f"{prompt_version}.txt")
         
         if not os.path.exists(prompt_file):
             print(f"Warning: Prompt file {prompt_file} not found. Using default prompt.")
@@ -101,6 +101,23 @@ class LLMGameRunner:
                 return f.read()
         except Exception as e:
             print(f"Warning: Error loading prompt file {prompt_file}: {e}. Using default prompt.")
+            return None
+    
+    def _load_action_prompt_template(self) -> Optional[str]:
+        """Load non-PDDL (action) user prompt template from file."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        prompt_file = os.path.join(project_root, "prompts", "user", "action.txt")
+        
+        if not os.path.exists(prompt_file):
+            print(f"Warning: Action prompt file {prompt_file} not found. Using default action prompt.")
+            return None
+        
+        try:
+            with open(prompt_file, 'r') as f:
+                return f.read()
+        except Exception as e:
+            print(f"Warning: Error loading action prompt file {prompt_file}: {e}. Using default action prompt.")
             return None
     
     def _create_player_clients(self, num_players: int) -> List[Any]:
@@ -259,21 +276,30 @@ class LLMGameRunner:
         return None
     
     def _create_prompt(self, observation: str, valid_actions: List[str], player_id: int, turn_num: int, num_coins: int) -> str:
-        prompt = f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
+        valid_actions_list = ""
+        for i, action in enumerate(valid_actions, 1):
+            valid_actions_list += f"{i}. {action}\n"
+        
+        action_template = self._load_action_prompt_template()
+        if action_template:
+            return action_template.format(
+                player_id=player_id + 1,
+                num_coins=num_coins,
+                turn_num=turn_num,
+                observation=observation,
+                valid_actions_list=valid_actions_list
+            )
+        return f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
 
 Current Situation (Turn {turn_num}):
 {observation}
 
 Available Actions:
-"""
-        for i, action in enumerate(valid_actions, 1):
-            prompt += f"{i}. {action}\n"
-        
-        prompt += """
+{valid_actions_list}
+
 Choose one action from the list above. Respond with ONLY the action text, nothing else.
 Example: "move north" or "take coin1" or "open door to north"
 """
-        return prompt
     
     def run_game(
         self,
@@ -291,7 +317,8 @@ Example: "move north" or "take coin1" or "open door to north"
         verbose: bool = True,
         auto_save: bool = True,
         output_file: Optional[str] = None,
-        run_dir_suffix: Optional[str] = None
+        run_dir_suffix: Optional[str] = None,
+        output_parent_dir: Optional[Path] = None
     ) -> Tuple[GameStats, Dict[str, Any], Optional[Path]]:
         game = CoinCollectorGame(
             num_locations=num_locations,
@@ -317,7 +344,7 @@ Example: "move north" or "take coin1" or "open door to north"
             print(f"Players: {num_players} (each with separate LLM instance)")
             print(f"Locations: {num_locations}")
             print(f"Coins: {num_coins}")
-            print(f"Doors: {'enabled' if include_doors else 'disabled'}")
+            print(f"Doors: {'start closed' if include_doors else 'start open'}")
             print(f"Distractor items: {num_distractor_items}")
             print(f"Coins in containers: {'enabled' if coins_in_containers else 'disabled'}")
             print(f"Limit inventory size: {'enabled' if limit_inventory_size else 'disabled'}")
@@ -334,7 +361,7 @@ Example: "move north" or "take coin1" or "open door to north"
             print()
         
         max_steps_str = f"{max_steps} steps" if max_steps else "unlimited steps"
-        doors_status = "enabled" if include_doors else "disabled"
+        doors_status = "doors start closed (must open to pass)" if include_doors else "doors start open (pass freely)"
         containers_status = "enabled" if coins_in_containers else "disabled"
         connectivity_desc = "minimal connections" if connectivity <= 0.3 else "maximum connections" if connectivity >= 0.7 else "moderate connections"
         inventory_limit_str = f"enabled (capacity: {num_coins + 1} items)" if limit_inventory_size else "disabled (unlimited)"
@@ -367,7 +394,7 @@ GAME SETTINGS:
 - Number of rooms/locations: {num_locations}
 - Number of coins to collect: {num_coins}
 - Maximum steps per player: {max_steps_str}
-- Doors: {doors_status} (if enabled, you must open doors before moving through them)
+- Doors: {doors_status}
 - Distractor items: {num_distractor_items} (non-coin items in the game)
 - Coins in containers: {containers_status} (if enabled, coins may be hidden inside containers like fridges, drawers, cabinets, etc.)
 - Inventory limit: {inventory_limit_str}
@@ -390,148 +417,177 @@ RESPONSE FORMAT:
         
         turn_num = 0
         max_turns = 200
-        
-        while turn_num < max_turns:
-            current_player = game.current_player
-            turn_num += 1
-            
-            observation = game.get_observation(current_player)
-            valid_actions = [act[0] for act in game.last_valid_actions]
-            
-            if not valid_actions:
-                if verbose:
-                    print(f"Turn {turn_num}: No valid actions available. Game over.")
-                break
-            
-            prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins)
-            
-            if verbose:
-                print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
-                print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
-            
-            llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
-            
-            if verbose:
-                if llm_response:
-                    print(f"LLM Response: {llm_response}")
-                else:
-                    print(f"LLM Response: [BLANK/EMPTY]")
-            
-            action = self._extract_action(llm_response, valid_actions)
-            
-            if action is None:
-                if verbose:
-                    if llm_response:
-                        print(f"Warning: Could not extract valid action from response '{llm_response}'. Skipping turn.")
-                    else:
-                        print(f"Warning: LLM returned blank/empty response. Skipping turn.")
-                
-                game.current_player = (current_player + 1) % num_players
-                game._generate_valid_actions(game.current_player)
-                continue
-            
-            if verbose:
-                print(f"Selected Action: {action}")
-            
-            obs, reward, done, info = game.step(action)
-            
-            stats.total_turns = turn_num
-            stats.player_turns.append(current_player)
-            stats.player_actions[current_player].append(action)
-            stats.final_score = info['scoreNormalized']
-            
-            if verbose:
-                print(f"Reward: {reward}")
-                print(f"Score: {info['scoreNormalized']:.2f} ({info['scoreRaw']}/{len(game.task_objects)})")
-                print(f"Player steps: {info['playerSteps']}")
-            
-            if done:
-                stats.game_won = info['taskSuccess']
-                if verbose:
-                    if stats.game_won:
-                        print(f"\nGame Won! All players collected all coins together!")
-                    else:
-                        print(f"\nGame ended (step limit reached)")
-                break
-        
-        if verbose:
-            print(f"\n=== Game Summary ===")
-            print(f"Total turns: {stats.total_turns}")
-            print(f"Game won: {stats.game_won}")
-            if stats.game_won:
-                print(f"All players won together!")
-            print(f"Final score: {stats.final_score:.2f}")
-            print(f"Actions per player:")
-            for i, actions in enumerate(stats.player_actions):
-                print(f"  Player {i + 1}: {len(actions)} actions")
-        
-        game_info = {
-            'total_turns': stats.total_turns,
-            'game_won': stats.game_won,
-            'final_score': stats.final_score,
-            'player_actions': stats.player_actions,
-            'player_steps': info['playerSteps'] if 'playerSteps' in locals() else [],
-            'model_type': self.model_type,
-            'model_name': self.model_name,
-            'num_locations': num_locations,
-            'num_coins': num_coins,
-            'num_players': num_players,
-            'max_steps': max_steps,
-            'include_doors': include_doors,
-            'num_distractor_items': num_distractor_items,
-            'coins_in_containers': coins_in_containers,
-            'limit_inventory_size': limit_inventory_size,
-            'connectivity': connectivity,
-            'seed': seed,
-            'timestamp': datetime.now().isoformat()
-        }
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         run_dir = None
+        player_log_handles = []
         if auto_save or output_file:
             output_base = Path('out')
             output_base.mkdir(exist_ok=True)
             
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
-            sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
-            folder_name = f"{sanitized_model_name}_{timestamp}"
-            if run_dir_suffix:
-                folder_name = f"{folder_name}_{run_dir_suffix}"
-            run_dir = output_base / folder_name
-            run_dir.mkdir(exist_ok=True)
-            
-            if output_file:
-                json_path = run_dir / Path(output_file).name
+            if output_parent_dir is not None and run_dir_suffix:
+                run_dir = output_parent_dir / run_dir_suffix
             else:
-                json_filename = f"game_{self.model_type}_{timestamp}.json"
-                json_path = run_dir / json_filename
-            
-            with open(json_path, 'w') as f:
-                json.dump(game_info, f, indent=2)
+                sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
+                sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
+                folder_name = f"{sanitized_model_name}_{timestamp}"
+                if run_dir_suffix:
+                    folder_name = f"{folder_name}_{run_dir_suffix}"
+                run_dir = output_base / folder_name
+            run_dir.mkdir(parents=True, exist_ok=True)
             
             for player_id in range(num_players):
-                player_log = player_clients[player_id]['conversation_log']
-                player_filename = f"player_{player_id + 1}_conversation.txt"
-                player_path = run_dir / player_filename
+                player_path = run_dir / f"player_{player_id + 1}_conversation.txt"
+                fh = open(player_path, 'w')
+                fh.write(f"=== Player {player_id + 1} Live Conversation Log ===\n\n")
+                fh.flush()
+                player_log_handles.append(fh)
+        
+        try:
+            while turn_num < max_turns:
+                current_player = game.current_player
+                turn_num += 1
                 
-                with open(player_path, 'w') as f:
-                    f.write(f"=== Player {player_id + 1} Complete Conversation Log ===\n\n")
-                    for msg in player_log:
-                        role = msg['role'].upper()
-                        content = msg['content']
-                        f.write(f"[{role}]\n{content}\n\n")
+                observation = game.get_observation(current_player)
+                valid_actions = [act[0] for act in game.last_valid_actions]
+                
+                if not valid_actions:
+                    if verbose:
+                        print(f"Turn {turn_num}: No valid actions available. Game over.")
+                    break
+                
+                prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins)
+                
+                if verbose:
+                    print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
+                    print(f"Observation: {observation[:200]}..." if len(observation) > 200 else f"Observation: {observation}")
+                
+                llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
+                
+                if verbose:
+                    if llm_response:
+                        print(f"LLM Response: {llm_response}")
+                    else:
+                        print(f"LLM Response: [BLANK/EMPTY]")
+                
+                if player_log_handles:
+                    log_fh = player_log_handles[current_player]
+                    conv = player_clients[current_player]['conversation_log']
+                    if len(conv) >= 2:
+                        for msg in conv[-2:]:
+                            role = msg['role'].upper()
+                            content = msg['content']
+                            log_fh.write(f"[{role}]\n{content}\n\n")
+                    log_fh.flush()
+                
+                action = self._extract_action(llm_response, valid_actions)
+                
+                if action is None:
+                    if verbose:
+                        if llm_response:
+                            print(f"Warning: Could not extract valid action from response '{llm_response}'. Skipping turn.")
+                        else:
+                            print(f"Warning: LLM returned blank/empty response. Skipping turn.")
+                    
+                    game.current_player = (current_player + 1) % num_players
+                    game._generate_valid_actions(game.current_player)
+                    continue
+                
+                if verbose:
+                    print(f"Selected Action: {action}")
+                
+                obs, reward, done, info = game.step(action)
+                
+                stats.total_turns = turn_num
+                stats.player_turns.append(current_player)
+                stats.player_actions[current_player].append(action)
+                stats.final_score = info['scoreNormalized']
+                
+                if verbose:
+                    print(f"Reward: {reward}")
+                    print(f"Score: {info['scoreNormalized']:.2f} ({info['scoreRaw']}/{len(game.task_objects)})")
+                    print(f"Player steps: {info['playerSteps']}")
+                
+                if done:
+                    stats.game_won = info['taskSuccess']
+                    if verbose:
+                        if stats.game_won:
+                            print(f"\nGame Won! All players collected all coins together!")
+                        else:
+                            print(f"\nGame ended (step limit reached)")
+                    break
             
             if verbose:
+                print(f"\n=== Game Summary ===")
+                print(f"Total turns: {stats.total_turns}")
+                print(f"Game won: {stats.game_won}")
+                if stats.game_won:
+                    print(f"All players won together!")
+                print(f"Final score: {stats.final_score:.2f}")
+                print(f"Actions per player:")
+                for i, actions in enumerate(stats.player_actions):
+                    print(f"  Player {i + 1}: {len(actions)} actions")
+            
+            game_info = {
+                'total_turns': stats.total_turns,
+                'game_won': stats.game_won,
+                'final_score': stats.final_score,
+                'player_actions': stats.player_actions,
+                'player_steps': info['playerSteps'] if 'playerSteps' in locals() else [],
+                'model_type': self.model_type,
+                'model_name': self.model_name,
+                'num_locations': num_locations,
+                'num_coins': num_coins,
+                'num_players': num_players,
+                'max_steps': max_steps,
+                'include_doors': include_doors,
+                'num_distractor_items': num_distractor_items,
+                'coins_in_containers': coins_in_containers,
+                'limit_inventory_size': limit_inventory_size,
+                'connectivity': connectivity,
+                'seed': seed,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            if run_dir:
                 if output_file:
-                    print(f"\nResults saved to directory: {run_dir}")
-                    print(f"  - Game results: {Path(output_file).name}")
+                    json_path = run_dir / Path(output_file).name
                 else:
-                    print(f"\nResults automatically saved to directory: {run_dir}")
-                    print(f"  - Game results: {json_path.name}")
-                for player_id in range(num_players):
-                    print(f"  - Player {player_id + 1} log: player_{player_id + 1}_conversation.txt")
-        
-        return stats, game_info, run_dir
+                    json_filename = f"game_{self.model_type}_{timestamp}.json"
+                    json_path = run_dir / json_filename
+                
+                with open(json_path, 'w') as f:
+                    json.dump(game_info, f, indent=2)
+                
+                if not player_log_handles:
+                    for player_id in range(num_players):
+                        player_log = player_clients[player_id]['conversation_log']
+                        player_filename = f"player_{player_id + 1}_conversation.txt"
+                        player_path = run_dir / player_filename
+                        with open(player_path, 'w') as f:
+                            f.write(f"=== Player {player_id + 1} Complete Conversation Log ===\n\n")
+                            for msg in player_log:
+                                role = msg['role'].upper()
+                                content = msg['content']
+                                f.write(f"[{role}]\n{content}\n\n")
+                
+                if verbose:
+                    if output_file:
+                        print(f"\nResults saved to directory: {run_dir}")
+                        print(f"  - Game results: {Path(output_file).name}")
+                    else:
+                        print(f"\nResults automatically saved to directory: {run_dir}")
+                        print(f"  - Game results: {json_path.name}")
+                    for player_id in range(num_players):
+                        print(f"  - Player {player_id + 1} log: player_{player_id + 1}_conversation.txt")
+            
+            return stats, game_info, run_dir
+        finally:
+            for fh in player_log_handles:
+                try:
+                    fh.close()
+                except (IOError, OSError):
+                    pass
 
 
 def load_env_file(env_path: str = '.env') -> None:
@@ -565,6 +621,43 @@ def load_config(config_path: str) -> Dict[str, Any]:
     except yaml.YAMLError as e:
         print(f"Error parsing YAML config: {e}")
         sys.exit(1)
+
+
+def load_dataset_configs(
+    dataset_dir: str,
+    base_config: Dict[str, Any],
+    config_path: str,
+) -> List[Tuple[Dict[str, Any], str]]:
+    """
+    Load configs from dataset maps. Returns list of (config, map_id) tuples.
+    Map options (seed, connectivity, num_locations, etc.) override base_config.
+    """
+    dataset_path = Path(dataset_dir)
+    if not dataset_path.is_absolute():
+        config_dir = Path(config_path).resolve().parent
+        dataset_path = config_dir / dataset_dir
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_path}")
+    map_dirs = sorted(
+        d for d in dataset_path.iterdir()
+        if d.is_dir() and d.name.startswith("map_") and (d / "meta.json").exists()
+    )
+    if not map_dirs:
+        raise FileNotFoundError(f"No map directories with meta.json found in {dataset_path}")
+    result = []
+    for map_dir in map_dirs:
+        with open(map_dir / "meta.json", "r") as f:
+            meta = json.load(f)
+        config = dict(base_config)
+        config["num_locations"] = meta.get("num_rooms", config.get("num_locations", 15))
+        config["num_coins"] = meta.get("num_coins", config.get("num_coins", 3))
+        config["seed"] = meta.get("seed", config.get("seed"))
+        config["connectivity"] = meta.get("connectivity", config.get("connectivity", 0.5))
+        config["num_distractor_items"] = meta.get("num_distractor_items", config.get("num_distractor_items", 0))
+        config["include_doors"] = meta.get("include_doors", config.get("include_doors", True))
+        config["coins_in_containers"] = meta.get("coins_in_containers", config.get("coins_in_containers", False))
+        result.append((config, map_dir.name))
+    return result
 
 
 def generate_config_combinations(config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -681,8 +774,19 @@ def main():
     load_env_file('.env')
     base_config = load_config(args.config)
     
-    # Generate all parameter combinations
-    config_combinations = generate_config_combinations(base_config)
+    use_dataset = base_config.get('use_dataset', False)
+    if isinstance(use_dataset, str):
+        use_dataset = use_dataset.lower() in ('true', '1', 'yes', 'on')
+    
+    if use_dataset:
+        dataset_dir = base_config.get('dataset_dir', 'dataset')
+        dataset_configs = load_dataset_configs(dataset_dir, base_config, args.config)
+        config_combinations = [c for c, _ in dataset_configs]
+        map_ids = [mid for _, mid in dataset_configs]
+    else:
+        config_combinations = generate_config_combinations(base_config)
+        map_ids = [None] * len(config_combinations)
+    
     total_runs = len(config_combinations)
     
     print(f"\n=== Running {total_runs} experiment(s) ===")
@@ -690,6 +794,17 @@ def main():
         print("Multiple parameter combinations detected. Running each sequentially.\n")
     
     exit_code = 0
+    output_parent_dir = None
+    if use_dataset and total_runs > 0:
+        output_base = Path('out')
+        output_base.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        model_name = config_combinations[0].get('model_name', 'gpt-4')
+        sanitized_model_name = (model_name or 'unknown').replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
+        sanitized_model_name = ''.join(c if c.isalnum() or c in ('_', '-', '.') else '_' for c in sanitized_model_name)
+        output_parent_dir = output_base / f"{sanitized_model_name}_{timestamp}"
+        output_parent_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Dataset output directory: {output_parent_dir}\n")
     
     for combo_idx, config in enumerate(config_combinations):
         if total_runs > 1:
@@ -717,8 +832,10 @@ def main():
         no_auto_save = config.get('no_auto_save', False)
         prompt_version = config.get('prompt_version', 'standard')
         
-        # Create run directory suffix
-        run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
+        if use_dataset and map_ids[combo_idx]:
+            run_suffix = map_ids[combo_idx]
+        else:
+            run_suffix = _create_run_suffix(config, base_config, combo_idx, total_runs)
         
         try:
             runner = LLMGameRunner(
@@ -743,7 +860,8 @@ def main():
                 verbose=not quiet,
                 auto_save=not no_auto_save,
                 output_file=output_file,
-                run_dir_suffix=run_suffix
+                run_dir_suffix=run_suffix,
+                output_parent_dir=output_parent_dir if use_dataset else None
             )
             
             if run_dir:

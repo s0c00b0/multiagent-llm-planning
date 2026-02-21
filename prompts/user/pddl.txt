@@ -2,6 +2,7 @@ You are Player {player_id} in a Coin Collector game. Your goal is to collect all
 
 Current Situation (Turn {turn_num}):
 {observation}
+{communication_section}
 
 Available Actions:
 {valid_actions_list}
@@ -41,12 +42,12 @@ COLLECT MODE (coins visible):
   - take(object, location) - take a coin
 
 PROBLEM FILE should define:
-- Objects: all current locations, visible coins (objects - only in COLLECT mode), directions (north, south, east, west)
+- Objects: all known and inferred locations from current and past observations, visible coins (objects - only in COLLECT mode), directions (north, south, east, west)
 - Initial state: 
   - Your current location (at(current_location))
-  - Visited rooms (visited(room_name) - include all rooms you have been to)
+  - Visited rooms: visited(room_name) for each room you have visited from the start of the game until now (every room from your previous problem file plus your current room)
   - Connections: door-between(loc1, loc2, dir) for each connection shown in observation (bidirectional: if "To the North you see X", include both door-between(current, X, north) and door-between(X, current, south))
-  - Door states: door-open(loc1, loc2, dir) for open doors (bidirectional - if door is open, include both directions)
+  - Door states: door-open(loc1, loc2, dir) for open doors or connections with no doors (bidirectional - if door is open, include both directions)
   - COLLECT MODE ONLY: Visible coin locations (coin_at(coin, location) - only include coins you can see in the observation)
 - Goal: 
   - EXPLORE MODE: (at(target_room)) OR (visited(target_room)) - visit an unvisited room that appears in the connections from your current location
@@ -59,6 +60,8 @@ IMPORTANT:
 - The solver's plan output format is fine - the system will extract the game actions from the PDDL solver output automatically
 - In EXPLORE mode: Your goal is to visit a room that you have never visited.
 - In COLLECT mode: Your goal is to collect an uncollected coin.
+
+Remember that your goal is to cooperate with your team to search for and collect all coins as quickly as possible.
 
 Respond with BOTH files in this exact format:
 
@@ -102,6 +105,7 @@ EXPLORE MODE example:
   (:init
     (at kitchen)
     (visited kitchen)
+    (visited bathroom)
     (door-between kitchen bathroom north)
     (door-between bathroom kitchen south)
     (door-open kitchen bathroom north)
