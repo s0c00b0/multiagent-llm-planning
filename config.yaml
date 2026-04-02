@@ -3,7 +3,7 @@ model: openai
 model_name: gpt-5-mini-2025-08-07
 
 # model: gemini
-# model_name: gemini-3-flash
+# model_name: gemini-3-flash-preview
 
 # model: vllm
 # model_name: Qwen/Qwen3-32B
@@ -27,10 +27,10 @@ api_params:
   
   # Gemini parameters
   # temperature: 0.7  # Uncomment and adjust for Gemini
-  # max_output_tokens: 200  # Uncomment and adjust for Gemini
+#  max_output_tokens: 400  # Uncomment and adjust for Gemini
 
 # Game Configuration
-num_locations: 10  # Number of rooms/locations in the house
+num_locations: 5  # Number of rooms/locations in the house
 num_coins: 2       # Number of coins to collect
 num_players: 2     # Number of players/agents
 max_steps: 50    # Maximum steps per player (null = unlimited)
@@ -40,8 +40,12 @@ num_distractor_items: 0  # Number of distractor (non-coin) items (0-10, default:
 coins_in_containers: false  # Whether coins can be placed inside containers (true/false)
 limit_inventory_size: true  # Whether inventory size is limited (true/false). If true, capacity = num_coins + 1
 connectivity: 0.5  # Room connectivity (0.0-1.0): 0.0=minimal connections, 1.0=maximum connections, 0.5=moderate (default)
-prompt_version: standard  # Prompt version to use: "standard" or "improved" (default: standard)
+prompt_version: query  # Prompt version to use: "standard" or "improved" (default: standard)
 use_pddl: false  # If true, use PDDL planning mode. The model generates PDDL domain/problem files, solves them, and executes the plan in sequence until complete or the next action is invalid. Supported in `run_experiment_vllm.py` (Qwen3-32B) and `run_experiment_api.py` (OpenAI/Gemini).
+shared_message_pool_enabled: true  # If true, include shared team message history in each turn prompt
+shared_message_max_queue_size: 1000  # Max shared messages retained (drops oldest when full)
+shared_message_max_chars: 200  # Max characters kept from the MESSAGE line
+include_player_room_history: true  # If true, include per-player move history (direction, room) in prompt and save history_<player>.txt
 verbose: true # Whether to print verbose output (true/false)
 
 # Dataset: run on all 20 predefined maps (dataset/maps/index.json) instead of a single config

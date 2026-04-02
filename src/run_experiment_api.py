@@ -298,6 +298,72 @@ class LLMGameRunner:
         
         return None
 
+    def _extract_optional_message(self, llm_response: str, max_chars: int = 200) -> Optional[str]:
+        if llm_response is None or not llm_response.strip():
+            return None
+
+        message_line = None
+        for raw_line in llm_response.splitlines():
+            line = raw_line.strip()
+            if line.lower().startswith("message:"):
+                message_line = line[len("message:"):].strip()
+                break
+
+        if message_line is None or not message_line:
+            return None
+        if message_line.lower() in {"none", "null", "n/a", "no"}:
+            return None
+
+        sanitized = " ".join(message_line.split())
+        if max_chars > 0:
+            sanitized = sanitized[:max_chars]
+        return sanitized if sanitized else None
+
+    def _format_shared_messages(self, shared_messages: List[Dict[str, Any]]) -> str:
+        if not shared_messages:
+            return "SHARED TEAM MESSAGES (oldest -> newest):\n(none)\n"
+
+        lines = ["SHARED TEAM MESSAGES (oldest -> newest):"]
+        for msg in shared_messages:
+            msg_turn = msg.get("turn", "?")
+            msg_player = msg.get("player_id", "?")
+            msg_text = msg.get("text", "")
+            lines.append(f"[T{msg_turn} P{msg_player}] {msg_text}")
+        return "\n".join(lines) + "\n"
+
+    def _format_player_move_history(self, move_history: List[str]) -> str:
+        if not move_history:
+            return "YOUR MOVE HISTORY (direction, room):\n(none)\n"
+        return "YOUR MOVE HISTORY (direction, room):\n" + "\n".join(move_history) + "\n"
+
+    def _record_player_move_history(
+        self,
+        action: str,
+        player_id: int,
+        game: CoinCollectorGame,
+        player_move_history: List[List[str]],
+        run_dir: Optional[Path] = None
+    ) -> None:
+        if not action or not action.startswith("move "):
+            return
+
+        parts = action.split(maxsplit=1)
+        if len(parts) < 2:
+            return
+
+        direction = parts[1].strip().lower()
+        location = game.player_locations[player_id] if player_id < len(game.player_locations) else None
+        if location is None:
+            return
+
+        entry = f"{direction}, {location.name}"
+        player_move_history[player_id].append(entry)
+
+        if run_dir:
+            history_path = run_dir / f"history_{player_id + 1}.txt"
+            with open(history_path, 'a') as f:
+                f.write(f"{entry}\n")
+
     def _create_prompt(
         self,
         observation: str,
@@ -306,7 +372,9 @@ class LLMGameRunner:
         turn_num: int,
         num_coins: int,
         use_pddl: bool = False,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        shared_messages: Optional[List[Dict[str, Any]]] = None,
+        player_move_history: Optional[List[str]] = None
     ) -> str:
         if use_pddl:
             valid_actions_list = ""
@@ -334,6 +402,23 @@ class LLMGameRunner:
                 turn_num=turn_num,
                 observation=observation,
                 valid_actions_list=valid_actions_list
+            )
+            if shared_messages is not None:
+                prompt = (
+                    f"{prompt}\n"
+                    f"{self._format_shared_messages(shared_messages)}\n"
+                    "RESPONSE FORMAT:\n"
+                    "- You MUST provide exactly one valid action every turn.\n"
+                    "- You MAY optionally provide one short team message.\n"
+                    "- Use exactly this format:\n"
+                    "ACTION: <one action from the list>\n"
+                    "MESSAGE: <short message to teammates OR 'none'>\n"
+                )
+
+        if player_move_history is not None:
+            prompt = (
+                f"{prompt}\n"
+                f"{self._format_player_move_history(player_move_history)}\n"
             )
         return prompt
 
@@ -607,6 +692,10 @@ class LLMGameRunner:
         topology: Optional[str] = None,
         prompt_version: str = "standard",
         use_pddl: bool = False,
+        shared_message_pool_enabled: bool = False,
+        shared_message_max_queue_size: int = 10,
+        shared_message_max_chars: int = 200,
+        include_player_room_history: bool = False,
         verbose: bool = True,
         auto_save: bool = True,
         output_file: Optional[str] = None,
@@ -645,6 +734,11 @@ class LLMGameRunner:
                 print(f"  Inventory capacity: {num_coins + 1} items")
             print(f"Connectivity: {connectivity}")
             print(f"Max steps per player: {max_steps or 'unlimited'}")
+            print(f"Shared message pool: {'enabled' if shared_message_pool_enabled else 'disabled'}")
+            if shared_message_pool_enabled:
+                print(f"  Shared queue size: {shared_message_max_queue_size}")
+                print(f"  Shared message max chars: {shared_message_max_chars}")
+            print(f"Player room history in prompt: {'enabled' if include_player_room_history else 'disabled'}")
             print()
         
         player_clients = self._create_player_clients(num_players)
@@ -656,7 +750,7 @@ class LLMGameRunner:
         run_dir = None
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         if auto_save or output_file:
-            output_base = Path('out')
+            output_base = Path('outLevel3GPT')
             output_base.mkdir(exist_ok=True)
 
             sanitized_model_name = self.model_name.replace('/', '_').replace('\\', '_').replace(' ', '_').replace(':', '_')
@@ -669,6 +763,11 @@ class LLMGameRunner:
 
             pddl_debug_dir = run_dir / 'pddl_debug'
             pddl_debug_dir.mkdir(exist_ok=True)
+            if include_player_room_history:
+                for player_id in range(num_players):
+                    history_path = run_dir / f"history_{player_id + 1}.txt"
+                    with open(history_path, 'w') as f:
+                        f.write("")
         
         max_steps_str = f"{max_steps} steps" if max_steps else "unlimited steps"
         doors_status = "enabled" if include_doors else "disabled"
@@ -701,6 +800,8 @@ class LLMGameRunner:
         
         turn_num = 0
         max_turns = 200
+        shared_messages: List[Dict[str, Any]] = []
+        player_move_history: List[List[str]] = [[] for _ in range(num_players)]
         
         while turn_num < max_turns:
             current_player = game.current_player
@@ -814,6 +915,14 @@ class LLMGameRunner:
                                 break
                             acting_player = game.current_player
                             obs, reward, done, info = game.step(parsed_action)
+                            if include_player_room_history:
+                                self._record_player_move_history(
+                                    parsed_action,
+                                    acting_player,
+                                    game,
+                                    player_move_history,
+                                    run_dir
+                                )
                             executed_any = True
                             stats.total_turns = turn_num
                             stats.player_turns.append(acting_player)
@@ -851,7 +960,8 @@ class LLMGameRunner:
                             turn_num,
                             num_coins,
                             use_pddl=True,
-                            feedback=feedback
+                            feedback=feedback,
+                            player_move_history=player_move_history[current_player] if include_player_room_history else None
                         )
 
                         if verbose and retry == 0:
@@ -1007,6 +1117,14 @@ class LLMGameRunner:
 
                         acting_player = game.current_player
                         obs, reward, done, info = game.step(parsed_action)
+                        if include_player_room_history:
+                            self._record_player_move_history(
+                                parsed_action,
+                                acting_player,
+                                game,
+                                player_move_history,
+                                run_dir
+                            )
                         executed_any = True
                         stats.total_turns = turn_num
                         stats.player_turns.append(acting_player)
@@ -1055,7 +1173,16 @@ class LLMGameRunner:
                         print(f"Warning: Failed to get valid action after {max_pddl_retries} PDDL attempts. Falling back to standard action extraction.")
                     action = self._extract_action(llm_response, valid_actions)
             else:
-                prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=False)
+                prompt = self._create_prompt(
+                    observation,
+                    valid_actions,
+                    current_player,
+                    turn_num,
+                    num_coins,
+                    use_pddl=False,
+                    shared_messages=shared_messages if shared_message_pool_enabled else None,
+                    player_move_history=player_move_history[current_player] if include_player_room_history else None
+                )
 
                 if verbose:
                     print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
@@ -1068,6 +1195,19 @@ class LLMGameRunner:
                         print(f"LLM Response: {llm_response}")
                     else:
                         print(f"LLM Response: [BLANK/EMPTY]")
+
+                if shared_message_pool_enabled:
+                    outgoing_message = self._extract_optional_message(llm_response, shared_message_max_chars)
+                    if outgoing_message:
+                        shared_messages.append({
+                            "turn": turn_num,
+                            "player_id": current_player + 1,
+                            "text": outgoing_message
+                        })
+                        if len(shared_messages) > shared_message_max_queue_size:
+                            shared_messages = shared_messages[-shared_message_max_queue_size:]
+                        if verbose:
+                            print(f"Shared message emitted by Player {current_player + 1}: {outgoing_message}")
 
                 action = self._extract_action(llm_response, valid_actions)
             
@@ -1089,6 +1229,14 @@ class LLMGameRunner:
                 print(f"Selected Action: {action}")
             
             obs, reward, done, info = game.step(action)
+            if include_player_room_history:
+                self._record_player_move_history(
+                    action,
+                    current_player,
+                    game,
+                    player_move_history,
+                    run_dir
+                )
             
             stats.total_turns = turn_num
             stats.player_turns.append(current_player)
@@ -1138,6 +1286,11 @@ class LLMGameRunner:
             'limit_inventory_size': limit_inventory_size,
             'connectivity': connectivity,
             'topology': topology,
+            'shared_message_pool_enabled': shared_message_pool_enabled,
+            'shared_message_max_queue_size': shared_message_max_queue_size,
+            'shared_message_max_chars': shared_message_max_chars,
+            'shared_messages_final': shared_messages,
+            'include_player_room_history': include_player_room_history,
             'seed': seed,
             'timestamp': datetime.now().isoformat()
         }
@@ -1388,6 +1541,20 @@ def main():
         use_pddl = config.get('use_pddl', False)
         if isinstance(use_pddl, str):
             use_pddl = use_pddl.lower() in ('true', '1', 'yes', 'on')
+        shared_message_pool_enabled = config.get('shared_message_pool_enabled', False)
+        if isinstance(shared_message_pool_enabled, str):
+            shared_message_pool_enabled = shared_message_pool_enabled.lower() in ('true', '1', 'yes', 'on')
+        shared_message_max_queue_size = config.get('shared_message_max_queue_size', 10)
+        if shared_message_max_queue_size is None:
+            shared_message_max_queue_size = 10
+        shared_message_max_queue_size = max(1, int(shared_message_max_queue_size))
+        shared_message_max_chars = config.get('shared_message_max_chars', 200)
+        if shared_message_max_chars is None:
+            shared_message_max_chars = 200
+        shared_message_max_chars = max(1, int(shared_message_max_chars))
+        include_player_room_history = config.get('include_player_room_history', False)
+        if isinstance(include_player_room_history, str):
+            include_player_room_history = include_player_room_history.lower() in ('true', '1', 'yes', 'on')
         if use_dataset and config.get('_dataset_map_id'):
             run_suffix = config['_dataset_map_id']
         else:
@@ -1415,6 +1582,10 @@ def main():
                 topology=topology,
                 prompt_version=prompt_version,
                 use_pddl=use_pddl,
+                shared_message_pool_enabled=shared_message_pool_enabled,
+                shared_message_max_queue_size=shared_message_max_queue_size,
+                shared_message_max_chars=shared_message_max_chars,
+                include_player_room_history=include_player_room_history,
                 verbose=not quiet,
                 auto_save=not no_auto_save,
                 output_file=output_file,
