@@ -33,6 +33,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.coin_collector import CoinCollectorGame
+from src.optimal_solver import compute_optimal_turns
 
 
 @dataclass
@@ -378,7 +379,28 @@ class LLMGameRunner:
         if not parts:
             return ""
         return "\n\nSAME-ROOM COMMUNICATION (you were in the same room with the following player(s) on their last turn; they share their PDDL problem file - you may use this to inform your own planning):\n\n" + "\n\n---\n\n".join(parts) + "\n\n"
-    
+
+    def _get_global_pddl_exchange(
+        self,
+        player_clients: List[Any],
+        current_player: int,
+    ) -> str:
+        """Get PDDL problem file from all other players regardless of room (communication mode 3)."""
+        parts = []
+        for other_id in range(len(player_clients)):
+            if other_id == current_player:
+                continue
+            conv = player_clients[other_id]['conversation_log']
+            for msg in reversed(conv):
+                if msg.get('role') == 'assistant':
+                    domain, problem = self._extract_pddl_files(msg['content'])
+                    if problem:
+                        parts.append(f"Player {other_id + 1} shares their PDDL problem file:\n```pddl\n{problem}\n```")
+                    break
+        if not parts:
+            return ""
+        return "\n\nGLOBAL COMMUNICATION (all players share their latest PDDL problem file regardless of location - you may use this to inform your own planning):\n\n" + "\n\n---\n\n".join(parts) + "\n\n"
+
     def _create_prompt(self, observation: str, valid_actions: List[str], player_id: int, turn_num: int, num_coins: int, use_pddl: bool = False, feedback: Optional[str] = None, communication_section: str = "") -> str:
         if use_pddl:
             pddl_template = self._load_pddl_prompt_template()
@@ -796,10 +818,11 @@ Example: "move north" or "take coin1" or "open door to north"
         )
         
         game.reset()
-        
+        optimal_turns = compute_optimal_turns(game)
+
         stats = GameStats()
         stats.player_actions = [[] for _ in range(num_players)]
-        
+
         if verbose:
             print(f"=== Starting Game ===")
             print(f"Model: {self.model_type} ({self.model_name})")
@@ -814,7 +837,7 @@ Example: "move north" or "take coin1" or "open door to north"
                 print(f"  Inventory capacity: {num_coins + 1} items")
             print(f"Connectivity: {connectivity}")
             print(f"Max steps per player: {max_steps or 'unlimited'}")
-            print(f"Communication mode: {communication_mode} (0=none, 1=same-room PDDL exchange)")
+            print(f"Communication mode: {communication_mode} (0=none, 1=same-room PDDL exchange, 3=global PDDL exchange)")
             print()
         
         player_clients = self._create_player_clients(num_players)
@@ -943,7 +966,9 @@ RESPONSE FORMAT:
                     max_pddl_retries = 3
                     last_solver_output = None
                     communication_section = ""
-                    if communication_mode >= 1:
+                    if communication_mode == 3:
+                        communication_section = self._get_global_pddl_exchange(player_clients, current_player)
+                    elif communication_mode == 1:
                         communication_section = self._get_same_room_pddl_exchange(player_clients, current_player, last_same_room_when_acted)
                     
                     for retry in range(max_pddl_retries):
@@ -1219,6 +1244,8 @@ RESPONSE FORMAT:
                 'final_score': stats.final_score,
                 'player_actions': stats.player_actions,
                 'player_steps': info['playerSteps'] if 'playerSteps' in locals() else [],
+                'optimal_turns': optimal_turns,
+                'optimality_ratio': stats.total_turns / optimal_turns if optimal_turns else None,
                 'model_type': self.model_type,
                 'model_name': self.model_name,
                 'num_locations': num_locations,
