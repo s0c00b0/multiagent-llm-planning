@@ -280,7 +280,6 @@ class LLMGameRunner:
         except Exception as e:
             print(f"Error calling LLM for Player {player_id + 1}: {e}")
             return None
-    
     def _extract_action(self, llm_response: str, valid_actions: List[str]) -> Optional[str]:
         if llm_response is None or not llm_response.strip():
             return None
@@ -329,7 +328,85 @@ class LLMGameRunner:
 
         return None
 
-    def _create_prompt(self, observation: str, valid_actions: List[str], player_id: int, turn_num: int, num_coins: int, use_pddl: bool = False, feedback: Optional[str] = None, communication_section: str = "") -> str:
+    def _extract_optional_message(self, llm_response: str, max_chars: int = 200) -> Optional[str]:
+        if llm_response is None or not llm_response.strip():
+            return None
+
+        message_line = None
+        for raw_line in llm_response.splitlines():
+            line = raw_line.strip()
+            if line.lower().startswith("message:"):
+                message_line = line[len("message:"):].strip()
+                break
+
+        if message_line is None or not message_line:
+            return None
+        if message_line.lower() in {"none", "null", "n/a", "no"}:
+            return None
+
+        sanitized = " ".join(message_line.split())
+        if max_chars > 0:
+            sanitized = sanitized[:max_chars]
+        return sanitized if sanitized else None
+
+    def _format_shared_messages(self, shared_messages: List[Dict[str, Any]]) -> str:
+        if not shared_messages:
+            return "SHARED TEAM MESSAGES (oldest -> newest):\n(none)\n"
+
+        lines = ["SHARED TEAM MESSAGES (oldest -> newest):"]
+        for msg in shared_messages:
+            msg_turn = msg.get("turn", "?")
+            msg_player = msg.get("player_id", "?")
+            msg_text = msg.get("text", "")
+            lines.append(f"[T{msg_turn} P{msg_player}] {msg_text}")
+        return "\n".join(lines) + "\n"
+
+    def _format_player_move_history(self, move_history: List[str]) -> str:
+        if not move_history:
+            return "YOUR MOVE HISTORY (direction, room):\n(none)\n"
+        return "YOUR MOVE HISTORY (direction, room):\n" + "\n".join(move_history) + "\n"
+
+    def _record_player_move_history(
+        self,
+        action: str,
+        player_id: int,
+        game: CoinCollectorGame,
+        player_move_history: List[List[str]],
+        run_dir: Optional[Path] = None
+    ) -> None:
+        if not action or not action.startswith("move "):
+            return
+
+        parts = action.split(maxsplit=1)
+        if len(parts) < 2:
+            return
+
+        direction = parts[1].strip().lower()
+        location = game.player_locations[player_id] if player_id < len(game.player_locations) else None
+        if location is None:
+            return
+
+        entry = f"{direction}, {location.name}"
+        player_move_history[player_id].append(entry)
+
+        if run_dir:
+            history_path = run_dir / f"history_{player_id + 1}.txt"
+            with open(history_path, "a") as f:
+                f.write(f"{entry}\n")
+
+    def _create_prompt(
+        self,
+        observation: str,
+        valid_actions: List[str],
+        player_id: int,
+        turn_num: int,
+        num_coins: int,
+        use_pddl: bool = False,
+        feedback: Optional[str] = None,
+        communication_section: str = "",
+        shared_messages: Optional[List[Dict[str, Any]]] = None,
+        player_move_history: Optional[List[str]] = None,
+    ) -> str:
         if use_pddl:
             pddl_template = self._load_pddl_prompt_template()
 
@@ -399,14 +476,15 @@ Respond with:
 
             action_template = self._load_action_prompt_template()
             if action_template:
-                return action_template.format(
+                prompt = action_template.format(
                     player_id=player_id + 1,
                     num_coins=num_coins,
                     turn_num=turn_num,
                     observation=observation,
                     valid_actions_list=valid_actions_list
                 )
-            prompt = f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
+            else:
+                prompt = f"""You are Player {player_id + 1} in a Coin Collector game. Your goal is to collect all {num_coins} coin(s).
 
 Current Situation (Turn {turn_num}):
 {observation}
@@ -417,6 +495,22 @@ Available Actions:
 Choose one action from the list above. Respond with ONLY the action text, nothing else.
 Example: "move north" or "take coin1" or "open door to north"
 """
+            if shared_messages is not None:
+                prompt = (
+                    f"{prompt}\n"
+                    f"{self._format_shared_messages(shared_messages)}\n"
+                    "RESPONSE FORMAT:\n"
+                    "- You MUST provide exactly one valid action every turn.\n"
+                    "- You MUST provide one short team message.\n"
+                    "- Use exactly this format:\n"
+                    "ACTION: <one action from the list>\n"
+                    "MESSAGE: <short message to teammates>\n"
+                )
+        if player_move_history is not None:
+            prompt = (
+                f"{prompt}\n"
+                f"{self._format_player_move_history(player_move_history)}\n"
+            )
         return prompt
 
     def _get_same_room_pddl_exchange(
@@ -769,6 +863,10 @@ Example: "move north" or "take coin1" or "open door to north"
         prompt_version: str = "standard",
         use_pddl: bool = False,
         communication_mode: int = 0,
+        shared_message_pool_enabled: bool = False,
+        shared_message_max_queue_size: int = 10,
+        shared_message_max_chars: int = 200,
+        include_player_room_history: bool = False,
         verbose: bool = True,
         auto_save: bool = True,
         output_file: Optional[str] = None,
@@ -810,6 +908,11 @@ Example: "move north" or "take coin1" or "open door to north"
             print(f"Max steps per player: {max_steps or 'unlimited'}")
             print(f"PDDL mode: {'enabled' if use_pddl else 'disabled'}")
             print(f"Communication mode: {communication_mode} (0=none, 1=same-room PDDL exchange, 3=global PDDL exchange)")
+            print(f"Shared message pool: {'enabled' if shared_message_pool_enabled else 'disabled'}")
+            if shared_message_pool_enabled:
+                print(f"  Shared queue size: {shared_message_max_queue_size}")
+                print(f"  Shared message max chars: {shared_message_max_chars}")
+            print(f"Player room history in prompt: {'enabled' if include_player_room_history else 'disabled'}")
             print()
 
         player_clients = self._create_player_clients(num_players)
@@ -838,6 +941,12 @@ Example: "move north" or "take coin1" or "open door to north"
 
             pddl_debug_dir = run_dir / 'pddl_debug'
             pddl_debug_dir.mkdir(exist_ok=True)
+
+            if include_player_room_history:
+                for player_id in range(num_players):
+                    history_path = run_dir / f"history_{player_id + 1}.txt"
+                    with open(history_path, "w") as f:
+                        f.write("")
 
             for player_id in range(num_players):
                 player_path = run_dir / f"player_{player_id + 1}_conversation.txt"
@@ -907,6 +1016,8 @@ RESPONSE FORMAT:
         # who were in the same room when player_id last took their turn. Used to deliver communication
         # on the recipient's next turn even if the sender has since left.
         last_same_room_when_acted = {}
+        shared_messages: List[Dict[str, Any]] = []
+        player_move_history: List[List[str]] = [[] for _ in range(num_players)]
 
         try:
             while turn_num < max_turns:
@@ -942,7 +1053,17 @@ RESPONSE FORMAT:
                         communication_section = self._get_same_room_pddl_exchange(player_clients, current_player, last_same_room_when_acted)
 
                     for retry in range(max_pddl_retries):
-                        prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=True, feedback=feedback, communication_section=communication_section)
+                        prompt = self._create_prompt(
+                            observation,
+                            valid_actions,
+                            current_player,
+                            turn_num,
+                            num_coins,
+                            use_pddl=True,
+                            feedback=feedback,
+                            communication_section=communication_section,
+                            player_move_history=player_move_history[current_player] if include_player_room_history else None,
+                        )
 
                         if verbose and retry == 0:
                             print(f"\n--- Turn {turn_num} - Player {current_player + 1} (PDDL Mode) ---")
@@ -1114,7 +1235,16 @@ RESPONSE FORMAT:
                         log_fh.write(f"[PARSED ACTION]\n{action or '(failed)'}\n\n")
                         log_fh.flush()
                 else:
-                    prompt = self._create_prompt(observation, valid_actions, current_player, turn_num, num_coins, use_pddl=False)
+                    prompt = self._create_prompt(
+                        observation,
+                        valid_actions,
+                        current_player,
+                        turn_num,
+                        num_coins,
+                        use_pddl=False,
+                        shared_messages=shared_messages if shared_message_pool_enabled else None,
+                        player_move_history=player_move_history[current_player] if include_player_room_history else None,
+                    )
 
                     if verbose:
                         print(f"\n--- Turn {turn_num} - Player {current_player + 1} ---")
@@ -1138,6 +1268,19 @@ RESPONSE FORMAT:
                                 log_fh.write(f"[{role}]\n{content}\n\n")
                         log_fh.flush()
 
+                    if shared_message_pool_enabled:
+                        outgoing_message = self._extract_optional_message(llm_response, shared_message_max_chars)
+                        if outgoing_message:
+                            shared_messages.append({
+                                "turn": turn_num,
+                                "player_id": current_player + 1,
+                                "text": outgoing_message
+                            })
+                            if len(shared_messages) > shared_message_max_queue_size:
+                                shared_messages = shared_messages[-shared_message_max_queue_size:]
+                            if verbose:
+                                print(f"Shared message emitted by Player {current_player + 1}: {outgoing_message}")
+
                     action = self._extract_action(llm_response, valid_actions)
 
                 if action is None:
@@ -1155,6 +1298,14 @@ RESPONSE FORMAT:
                     print(f"Selected Action: {action}")
 
                 obs, reward, done, info = game.step(action)
+                if include_player_room_history:
+                    self._record_player_move_history(
+                        action,
+                        current_player,
+                        game,
+                        player_move_history,
+                        run_dir,
+                    )
 
                 # Record who was in same room when this player acted (for communication on others' next turns)
                 last_same_room_when_acted[current_player] = same_room_at_turn_start
@@ -1208,6 +1359,11 @@ RESPONSE FORMAT:
                 'coins_in_containers': coins_in_containers,
                 'limit_inventory_size': limit_inventory_size,
                 'connectivity': connectivity,
+                'shared_message_pool_enabled': shared_message_pool_enabled,
+                'shared_message_max_queue_size': shared_message_max_queue_size,
+                'shared_message_max_chars': shared_message_max_chars,
+                'shared_messages_final': shared_messages,
+                'include_player_room_history': include_player_room_history,
                 'seed': seed,
                 'timestamp': datetime.now().isoformat()
             }
@@ -1505,6 +1661,20 @@ def main():
                 communication_mode = int(communication_mode)
             except ValueError:
                 communication_mode = 0
+        shared_message_pool_enabled = config.get('shared_message_pool_enabled', False)
+        if isinstance(shared_message_pool_enabled, str):
+            shared_message_pool_enabled = shared_message_pool_enabled.lower() in ('true', '1', 'yes', 'on')
+        shared_message_max_queue_size = config.get('shared_message_max_queue_size', 10)
+        if shared_message_max_queue_size is None:
+            shared_message_max_queue_size = 10
+        shared_message_max_queue_size = max(1, int(shared_message_max_queue_size))
+        shared_message_max_chars = config.get('shared_message_max_chars', 200)
+        if shared_message_max_chars is None:
+            shared_message_max_chars = 200
+        shared_message_max_chars = max(1, int(shared_message_max_chars))
+        include_player_room_history = config.get('include_player_room_history', False)
+        if isinstance(include_player_room_history, str):
+            include_player_room_history = include_player_room_history.lower() in ('true', '1', 'yes', 'on')
 
         if use_dataset and map_ids[combo_idx]:
             run_suffix = map_ids[combo_idx]
@@ -1533,6 +1703,10 @@ def main():
                 prompt_version=prompt_version,
                 use_pddl=use_pddl,
                 communication_mode=communication_mode,
+                shared_message_pool_enabled=shared_message_pool_enabled,
+                shared_message_max_queue_size=shared_message_max_queue_size,
+                shared_message_max_chars=shared_message_max_chars,
+                include_player_room_history=include_player_room_history,
                 verbose=not quiet,
                 auto_save=not no_auto_save,
                 output_file=output_file,
