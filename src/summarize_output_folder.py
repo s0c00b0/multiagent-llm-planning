@@ -19,43 +19,11 @@ def _read_json(path: Path) -> Dict:
         return json.load(f)
 
 
-def _count_messages_in_conversation_file(path: Path) -> int:
-    if not path.exists() or not path.is_file():
+def _count_messages_for_run(game_data: Dict) -> int:
+    shared_messages_final = game_data.get("shared_messages_final", [])
+    if not isinstance(shared_messages_final, list):
         return 0
-
-    count = 0
-    in_assistant_block = False
-    none_tokens = {"none", "null", "n/a", "no"}
-
-    with open(path, "r") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-
-            if line == "[ASSISTANT]":
-                in_assistant_block = True
-                continue
-            if line.startswith("[") and line.endswith("]"):
-                in_assistant_block = False
-                continue
-
-            if not in_assistant_block:
-                continue
-            if not line.startswith("MESSAGE:"):
-                continue
-
-            message_text = line[len("MESSAGE:"):].strip().lower()
-            if not message_text or message_text in none_tokens:
-                continue
-            count += 1
-
-    return count
-
-
-def _count_messages_for_run(run_dir: Path) -> int:
-    # Per request: count messages from Player 1 and Player 2 conversation logs.
-    player_1 = run_dir / "player_1_conversation.txt"
-    player_2 = run_dir / "player_2_conversation.txt"
-    return _count_messages_in_conversation_file(player_1) + _count_messages_in_conversation_file(player_2)
+    return len(shared_messages_final)
 
 
 def summarize(parent_output_dir: Path) -> int:
@@ -78,7 +46,7 @@ def summarize(parent_output_dir: Path) -> int:
         num_players = data.get("num_players")
         max_steps = data.get("max_steps")
         turns = data.get("total_turns")
-        total_messages_sent = _count_messages_for_run(json_path.parent)
+        total_messages_sent = _count_messages_for_run(data)
 
         print(f"Run: {run_name}")
         print("Room Config:")
