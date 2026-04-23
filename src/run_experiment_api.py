@@ -361,10 +361,19 @@ class LLMGameRunner:
             lines.append(f"[T{msg_turn} P{msg_player}] {msg_text}")
         return "\n".join(lines) + "\n"
 
-    def _format_player_move_history(self, move_history: List[str]) -> str:
-        if not move_history:
-            return "YOUR MOVE HISTORY (direction, room):\n(none)\n"
-        return "YOUR MOVE HISTORY (direction, room):\n" + "\n".join(move_history) + "\n"
+    def _format_player_move_history(self, all_player_histories: List[List[str]], current_player_id: int) -> str:
+        lines = ["PLAYER ROOM HISTORIES (direction, room):"]
+        for idx, history in enumerate(all_player_histories):
+            label = f"Player {idx + 1}"
+            if idx == current_player_id:
+                label += " (you)"
+            lines.append(f"{label}:")
+            if history:
+                lines.extend(history)
+            else:
+                lines.append("(none)")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
 
     def _record_player_move_history(
         self,
@@ -405,7 +414,7 @@ class LLMGameRunner:
         feedback: Optional[str] = None,
         communication_section: str = "",
         shared_messages: Optional[List[Dict[str, Any]]] = None,
-        player_move_history: Optional[List[str]] = None,
+        player_move_history: Optional[List[List[str]]] = None,
     ) -> str:
         if use_pddl:
             pddl_template = self._load_pddl_prompt_template()
@@ -518,7 +527,7 @@ Example: "move north" or "take coin1" or "open door to north"
         if player_move_history is not None:
             prompt = (
                 f"{prompt}\n"
-                f"{self._format_player_move_history(player_move_history)}\n"
+                f"{self._format_player_move_history(player_move_history, player_id)}\n"
             )
         return prompt
 
@@ -1073,7 +1082,7 @@ RESPONSE FORMAT:
                             feedback=feedback,
                             communication_section=communication_section,
                             shared_messages=shared_messages if shared_message_pool_enabled else None,
-                            player_move_history=player_move_history[current_player] if include_player_room_history else None,
+                            player_move_history=player_move_history if include_player_room_history else None,
                         )
 
                         if verbose and retry == 0:
@@ -1272,7 +1281,7 @@ RESPONSE FORMAT:
                         num_coins,
                         use_pddl=False,
                         shared_messages=shared_messages if shared_message_pool_enabled else None,
-                        player_move_history=player_move_history[current_player] if include_player_room_history else None,
+                        player_move_history=player_move_history if include_player_room_history else None,
                     )
 
                     if verbose:
