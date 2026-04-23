@@ -469,6 +469,15 @@ Respond with:
 )
 ```
 """
+            if shared_messages is not None:
+                prompt = (
+                    f"{prompt}\n"
+                    f"{self._format_shared_messages(shared_messages)}\n"
+                    "COMMUNICATION REQUIREMENT:\n"
+                    "- You MUST include one short teammate message in every response.\n"
+                    "- Add a final line after the PDDL blocks in this exact format:\n"
+                    "MESSAGE: <short message to teammates>\n"
+                )
         else:
             valid_actions_list = ""
             for i, action in enumerate(valid_actions, 1):
@@ -1047,6 +1056,7 @@ RESPONSE FORMAT:
                     max_pddl_retries = 3
                     last_solver_output = None
                     communication_section = ""
+                    pending_outgoing_message = None
                     if communication_mode == 3:
                         communication_section = self._get_global_pddl_exchange(player_clients, current_player)
                     elif communication_mode == 1:
@@ -1062,6 +1072,7 @@ RESPONSE FORMAT:
                             use_pddl=True,
                             feedback=feedback,
                             communication_section=communication_section,
+                            shared_messages=shared_messages if shared_message_pool_enabled else None,
                             player_move_history=player_move_history[current_player] if include_player_room_history else None,
                         )
 
@@ -1071,6 +1082,13 @@ RESPONSE FORMAT:
 
                         llm_response = self._call_llm(prompt, current_player, player_clients, system_prompt)
                         llm_response_cleaned = self._strip_reasoning_tokens(llm_response) if llm_response else ""
+                        if shared_message_pool_enabled:
+                            outgoing_message = self._extract_optional_message(
+                                llm_response_cleaned if llm_response_cleaned else llm_response,
+                                shared_message_max_chars
+                            )
+                            if outgoing_message:
+                                pending_outgoing_message = outgoing_message
 
                         if verbose:
                             if llm_response:
@@ -1229,6 +1247,17 @@ RESPONSE FORMAT:
                         if verbose:
                             print(f"Warning: Failed to get valid action after {max_pddl_retries} PDDL attempts. Falling back to standard action extraction.")
                         action = self._extract_action(llm_response, valid_actions)
+
+                    if shared_message_pool_enabled and pending_outgoing_message:
+                        shared_messages.append({
+                            "turn": turn_num,
+                            "player_id": current_player + 1,
+                            "text": pending_outgoing_message
+                        })
+                        if len(shared_messages) > shared_message_max_queue_size:
+                            shared_messages = shared_messages[-shared_message_max_queue_size:]
+                        if verbose:
+                            print(f"Shared message emitted by Player {current_player + 1}: {pending_outgoing_message}")
 
                     if player_log_handles:
                         log_fh = player_log_handles[current_player]
