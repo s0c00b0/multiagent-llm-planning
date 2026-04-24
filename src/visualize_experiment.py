@@ -7,6 +7,7 @@ import os
 import math
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
+from collections import Counter
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyArrowPatch, PathPatch
@@ -90,35 +91,121 @@ def simulate_player_paths(
     return player_paths, room_actions
 
 
+def _compute_room_visit_counts(player_paths: List[List[Tuple[str, int]]], num_players: int) -> List[Counter]:
+    """Count room visit occurrences per player."""
+    counts: List[Counter] = [Counter() for _ in range(num_players)]
+    for player_id in range(num_players):
+        path = player_paths[player_id] if player_id < len(player_paths) else []
+        filtered_rooms: List[str] = []
+        for room_name, _turn in path:
+            if not filtered_rooms or filtered_rooms[-1] != room_name:
+                filtered_rooms.append(room_name)
+        counts[player_id].update(filtered_rooms)
+    return counts
+
+
+def _create_game_from_experiment(experiment_data: Dict) -> CoinCollectorGame:
+    """Create CoinCollectorGame from experiment data with topology compatibility."""
+    base_kwargs = dict(
+        num_locations=experiment_data['num_locations'],
+        num_coins=experiment_data['num_coins'],
+        num_players=experiment_data['num_players'],
+        max_steps=experiment_data.get('max_steps'),
+        seed=experiment_data.get('seed'),
+        include_doors=experiment_data.get('include_doors', False),
+        num_distractor_items=experiment_data.get('num_distractor_items', 0),
+        coins_in_containers=experiment_data.get('coins_in_containers', False),
+        limit_inventory_size=experiment_data.get('limit_inventory_size', True),
+        connectivity=experiment_data.get('connectivity', 0.5),
+    )
+    topology = experiment_data.get('topology')
+
+    if topology is not None:
+        try:
+            return CoinCollectorGame(topology=topology, **base_kwargs)
+        except TypeError as exc:
+            if "unexpected keyword argument 'topology'" not in str(exc):
+                raise
+
+    return CoinCollectorGame(**base_kwargs)
+
+
+def visualize_room_visit_heatmap(
+    experiment_data: Dict,
+    player_id: int,
+    figsize: Tuple[int, int] = (16, 12),
+    cmap_name: str = "Reds"
+) -> plt.Figure:
+    """Create a per-player room-visit heatmap overlay on the map."""
+    fig, ax, pos, room_box_dims = visualize_experiment(experiment_data, draw_paths=False, figsize=figsize)
+
+    num_players = experiment_data['num_players']
+    player_actions = experiment_data['player_actions']
+
+    game = _create_game_from_experiment(experiment_data)
+    game.reset()
+    player_paths, _room_actions = simulate_player_paths(game, player_actions, num_players)
+    visit_counts_by_player = _compute_room_visit_counts(player_paths, num_players)
+
+    if player_id < 0 or player_id >= num_players:
+        raise ValueError(f"player_id out of range: {player_id} (num_players={num_players})")
+
+    visit_counts = visit_counts_by_player[player_id]
+    max_visits = max(visit_counts.values()) if visit_counts else 0
+
+    cmap = plt.get_cmap(cmap_name)
+    vmax = max(1, max_visits)
+    norm = plt.Normalize(vmin=1, vmax=vmax)
+
+    for room_name, count in visit_counts.items():
+        if count <= 0:
+            continue
+        if room_name not in pos or room_name not in room_box_dims:
+            continue
+        x, y = pos[room_name]
+        box_width, box_height = room_box_dims[room_name]
+        color = cmap(norm(min(count, vmax)))
+
+        overlay = mpatches.FancyBboxPatch(
+            (x - box_width / 2, y - box_height / 2),
+            box_width, box_height,
+            boxstyle="round,pad=0.03",
+            facecolor=color,
+            edgecolor="none",
+            alpha=0.55,
+            zorder=3.2
+        )
+        ax.add_patch(overlay)
+
+        label_x = x - box_width / 2 + 0.06
+        label_y = y + box_height / 2 - 0.04
+        ax.text(
+            label_x,
+            label_y,
+            str(count),
+            ha="left",
+            va="top",
+            fontsize=10,
+            fontweight="bold",
+            color="black",
+            zorder=6,
+            bbox=dict(facecolor="white", alpha=0.65, edgecolor="none", boxstyle="round,pad=0.18")
+        )
+
+    ax.set_title(f"Room Visit Heatmap - Player {player_id + 1}", fontsize=16, fontweight='bold', pad=5)
+    plt.tight_layout()
+    return fig
+
+
 def visualize_experiment(
     experiment_data: Dict,
     draw_paths: bool = True,
     figsize: Tuple[int, int] = (16, 12)
 ) -> Tuple[plt.Figure, plt.Axes, Dict[str, Tuple[float, float]], Dict[str, Tuple[float, float]]]:
-    num_locations = experiment_data['num_locations']
-    num_coins = experiment_data['num_coins']
     num_players = experiment_data['num_players']
-    max_steps = experiment_data.get('max_steps')
-    seed = experiment_data.get('seed')
-    include_doors = experiment_data.get('include_doors', False)
-    num_distractor_items = experiment_data.get('num_distractor_items', 0)
-    coins_in_containers = experiment_data.get('coins_in_containers', False)
-    limit_inventory_size = experiment_data.get('limit_inventory_size', True)
-    connectivity = experiment_data.get('connectivity', 0.5)
     player_actions = experiment_data['player_actions']
-    
-    game = CoinCollectorGame(
-        num_locations=num_locations,
-        num_coins=num_coins,
-        num_players=num_players,
-        max_steps=max_steps,
-        seed=seed,
-        include_doors=include_doors,
-        num_distractor_items=num_distractor_items,
-        coins_in_containers=coins_in_containers,
-        limit_inventory_size=limit_inventory_size,
-        connectivity=connectivity
-    )
+
+    game = _create_game_from_experiment(experiment_data)
     
     game.reset()
     
@@ -422,7 +509,7 @@ def visualize_experiment(
             
             start_room, _ = filtered_path[0]
             end_room, _ = filtered_path[-1]
-            if end_room in pos and end_room != start_room:
+            if end_room in pos:
                 x, y = pos[end_room]
                 square_size = 0.15
                 offset_radius = 0.12
@@ -536,6 +623,14 @@ def main():
         fig_full.savefig(full_map_path, dpi=150, bbox_inches='tight')
         print(f"Full visualization saved to {full_map_path}")
         plt.close(fig_full)
+
+        num_players = experiment_data.get("num_players", 1)
+        for player_id in range(num_players):
+            fig_heat = visualize_room_visit_heatmap(experiment_data, player_id=player_id)
+            heatmap_path = experiment_path / f"room_visit_heatmap_player_{player_id + 1}.png"
+            fig_heat.savefig(heatmap_path, dpi=150, bbox_inches='tight')
+            print(f"Room visit heatmap saved to {heatmap_path}")
+            plt.close(fig_heat)
         
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

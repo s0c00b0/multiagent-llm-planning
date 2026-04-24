@@ -1,37 +1,37 @@
 # LLM Model Configuration
-# model: openai
-# model_name: gpt-5-mini-2025-08-07
+model: openai
+model_name: gpt-5-mini-2025-08-07
 
 # model: gemini
-# model_name: gemini-2.5-flash
+# model_name: gemini-3-flash-preview
 
-model: vllm
-model_name: Qwen/Qwen3-32B
+# model: vllm
+# model_name: Qwen/Qwen3-32B
 
 # LLM API Parameters (model-specific, use null to omit parameter)
 api_params:
   # VLLM parameters (for local model inference)
-  temperature: 0.7  # Sampling temperature (0.0-2.0, default: 1.0)
-  max_tokens: 8192  # Maximum tokens in completion (default: 500). For PDDL mode, recommend 4096-8192 to account for reasoning tokens + both domain and problem files
-  top_p: 0.9  # Nucleus sampling parameter (0.0-1.0, null = disabled)
-  seed: 42  # Random seed for deterministic responses (integer, null = random)
-  gpu_memory_utilization: 0.9  # GPU memory utilization (0.0-1.0, default: 0.9). Increase if you have more GPU memory.
-  max_model_len: 35000  # Maximum model sequence length (reduces KV cache memory). Default is model's max (40960 for Qwen3-32B). Reduce if you get memory errors.
+  # temperature: 0.7  # Sampling temperature (0.0-2.0, default: 1.0)
+  # max_tokens: 8192  # Maximum tokens in completion (default: 500). For PDDL mode, recommend 4096-8192 to account for reasoning tokens + both domain and problem files
+  # top_p: 0.9  # Nucleus sampling parameter (0.0-1.0, null = disabled)
+  # seed: 42  # Random seed for deterministic responses (integer, null = random)
+  # gpu_memory_utilization: 0.9  # GPU memory utilization (0.0-1.0, default: 0.9). Increase if you have more GPU memory.
+  # max_model_len: 35000  # Maximum model sequence length (reduces KV cache memory). Default is model's max (40960 for Qwen3-32B). Reduce if you get memory errors.
   
   # OpenAI parameters
-  # temperature: null  # 0.0-2.0 for most models, null/omitted for GPT-5 models (default: 1)
-  # max_completion_tokens: 500  # Maximum tokens in completion (use max_tokens for older models)
-  # max_tokens: null  # Alternative to max_completion_tokens for older OpenAI models
-  # top_p: null  # Nucleus sampling parameter (0.0-1.0)
-  # seed: 42  # Random seed for deterministic responses (integer, null = random). Supported by OpenAI.
+  temperature: null  # 0.0-2.0 for most models, null/omitted for GPT-5 models (default: 1)
+  max_completion_tokens: 10000  # Maximum tokens in completion (use max_tokens for older models)
+  max_tokens: null  # Alternative to max_completion_tokens for older OpenAI models
+  top_p: null  # Nucleus sampling parameter (0.0-1.0)
+  seed: 42  # Random seed for deterministic responses (integer, null = random). Supported by OpenAI.
   
   # Gemini parameters
   # temperature: 0.7  # Uncomment and adjust for Gemini
   # max_output_tokens: 200  # Uncomment and adjust for Gemini
 
 # Game Configuration
-num_locations: 15  # Number of rooms/locations in the house
-num_coins: 3       # Number of coins to collect
+num_locations: 5  # Number of rooms/locations in the house
+num_coins: 1      # Number of coins to collect
 num_players: 2     # Number of players/agents
 max_steps: 30    # Maximum steps per player (null = unlimited)
 seed: 72603           # Random seed for reproducibility (null = random)
@@ -40,10 +40,14 @@ num_distractor_items: 3  # Number of distractor (non-coin) items (0-10, default:
 coins_in_containers: false  # Whether coins can be placed inside containers (true/false)
 limit_inventory_size: true  # Whether inventory size is limited (true/false). If true, capacity = num_coins + 1
 connectivity: 0.42  # Room connectivity (0.0-1.0): 0.0=minimal connections, 1.0=maximum connections, 0.5=moderate (default)
-use_dataset: true  # If true, run sequentially on each map in dataset/; map options (seed, connectivity, num_locations, etc.) are overridden from each map's meta.json
+use_dataset: false  # If true, run sequentially on each map in dataset/; map options (seed, connectivity, num_locations, etc.) are overridden from each map's meta.json
 prompt_version: standard  # Prompt version to use: "standard" or "improved" (default: standard)
 use_pddl: true  # If true, use PDDL planning mode (only for Qwen3-32B in run_experiment_vllm.py). Model generates PDDL domain/problem files, solves them, and executes first action from plan.
 communication_mode: 0  # 0 = no communication (observe actions only); 1 = same-room: agents in same room exchange PDDL domain/problem files
+shared_message_pool_enabled: true  # If true, include shared team message history in each turn prompt
+shared_message_max_queue_size: 1000  # Max shared messages retained (drops oldest when full)
+shared_message_max_chars: 200  # Max characters kept from the MESSAGE line
+include_player_room_history: true  # If true, include per-player move history (direction, room) in prompt and save history_<player>.txt
 verbose: true # Whether to print verbose output (true/false)
 
 # Optional Output Settings
